@@ -1,6 +1,6 @@
 import { Redis, RedisOptions } from 'ioredis'
 
-export type CacheConfig = {
+export type CacheXSConfig = {
 	redisConnection?: Redis
 	redisUrl?: string
 	redisConfig?: RedisOptions

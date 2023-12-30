@@ -1,10 +1,10 @@
 import Redis, { RedisOptions } from 'ioredis'
 
-import { CacheConfig } from './types/CacheConfig'
+import { CacheXSConfig } from './types/CacheXSConfig'
 import { SetForeverOptions } from './types/SetForeverOptions'
 import { SetOptions } from './types/SetOptions'
 
-export default class Cache {
+export default class CacheXS {
 	protected _redisConnection: Redis
 	protected _redisUrl: string | undefined
 	protected _redisConfig: RedisOptions | undefined
@@ -19,8 +19,8 @@ export default class Cache {
 		cacheNamespace = 'cache',
 		defaultExpiresIn = 300,
 		enableDebug = false,
-	}: CacheConfig = {}) {
-		this.configureCache({
+	}: CacheXSConfig = {}) {
+		this.configureCacheXS({
 			redisConnection,
 			redisUrl,
 			redisConfig,
@@ -30,14 +30,14 @@ export default class Cache {
 		})
 	}
 
-	protected configureCache({
+	protected configureCacheXS({
 		redisConnection,
 		redisConfig,
 		redisUrl,
 		cacheNamespace = 'cache',
 		defaultExpiresIn = 300,
 		enableDebug = false,
-	}: CacheConfig) {
+	}: CacheXSConfig) {
 		if (redisConnection) {
 			this._redisConnection = redisConnection
 			this._redisConfig = redisConnection.options
@@ -69,8 +69,8 @@ export default class Cache {
 		cacheNamespace = 'cache',
 		defaultExpiresIn = 300,
 		enableDebug = false,
-	}: CacheConfig): Cache {
-		this.configureCache({ redisConnection, redisConfig, redisUrl, cacheNamespace, defaultExpiresIn, enableDebug })
+	}: CacheXSConfig): CacheXS {
+		this.configureCacheXS({ redisConnection, redisConfig, redisUrl, cacheNamespace, defaultExpiresIn, enableDebug })
 		return this
 	}
 
@@ -85,7 +85,7 @@ export default class Cache {
 		const value = await this._redisConnection.get(keyWithNamespace)
 
 		if (this._enableDebug) {
-			console.debug(`Cache -> Get -> ${keyWithNamespace}: ${value}`)
+			console.debug(`CacheXS -> Get -> ${keyWithNamespace}: ${value}`)
 		}
 
 		if (value) {
@@ -108,7 +108,7 @@ export default class Cache {
 		await this._redisConnection.set(keyWithNamespace, JSON.stringify(value), 'EX', expiresIn)
 
 		if (this._enableDebug) {
-			console.debug(`Cache -> Set (For: ${expiresIn} Sec.) -> ${keyWithNamespace}: ${value}`)
+			console.debug(`CacheXS -> Set (For: ${expiresIn} Sec.) -> ${keyWithNamespace}: ${value}`)
 		}
 	}
 
@@ -119,7 +119,7 @@ export default class Cache {
 		await this._redisConnection.set(keyWithNamespace, JSON.stringify(value))
 
 		if (this._enableDebug) {
-			console.debug(`Cache -> Set (Forever) -> ${keyWithNamespace}: ${value}`)
+			console.debug(`CacheXS -> Set (Forever) -> ${keyWithNamespace}: ${value}`)
 		}
 	}
 
@@ -131,7 +131,7 @@ export default class Cache {
 		const value = await this.get<T>(keyWithNamespace)
 
 		if (this._enableDebug) {
-			console.debug(`Cache -> Get -> ${keyWithNamespace}: ${value}`)
+			console.debug(`CacheXS -> Get -> ${keyWithNamespace}: ${value}`)
 		}
 
 		if (value) {
@@ -141,7 +141,7 @@ export default class Cache {
 		await this.set(key, fallbackValue, options)
 
 		if (this._enableDebug) {
-			console.debug(`Cache -> Set (For: ${expiresIn} Sec.) -> ${keyWithNamespace}: ${value}`)
+			console.debug(`CacheXS -> Set (For: ${expiresIn} Sec.) -> ${keyWithNamespace}: ${value}`)
 		}
 
 		return fallbackValue
@@ -154,7 +154,7 @@ export default class Cache {
 		const value = await this.get<T>(keyWithNamespace)
 
 		if (this._enableDebug) {
-			console.debug(`Cache -> Get -> ${keyWithNamespace}: ${value}`)
+			console.debug(`CacheXS -> Get -> ${keyWithNamespace}: ${value}`)
 		}
 
 		if (value) {
@@ -164,7 +164,7 @@ export default class Cache {
 		await this.set(key, fallbackValue)
 
 		if (this._enableDebug) {
-			console.debug(`Cache -> Set (Forever) -> ${keyWithNamespace}: ${value}`)
+			console.debug(`CacheXS -> Set (Forever) -> ${keyWithNamespace}: ${value}`)
 		}
 		return fallbackValue
 	}
@@ -175,7 +175,7 @@ export default class Cache {
 		await this._redisConnection.del(keyWithNamespace)
 
 		if (this._enableDebug) {
-			console.debug(`Cache -> Delete -> ${key}`)
+			console.debug(`CacheXS -> Delete -> ${key}`)
 		}
 	}
 
@@ -185,7 +185,7 @@ export default class Cache {
 		await this._redisConnection.del(keys)
 
 		if (this._enableDebug) {
-			console.debug('Cache -> Delete All')
+			console.debug('CacheXS -> Delete All')
 		}
 	}
 
