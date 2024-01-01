@@ -1,31 +1,30 @@
 import Redis, { RedisOptions } from 'ioredis'
 
 import { CacheXSConfig } from './types/CacheXSConfig'
-import { SetForeverOptions } from './types/SetForeverOptions'
 import { SetOptions } from './types/SetOptions'
 
 export default class CacheXS {
 	protected _redisConnection: Redis
 	protected _redisUrl: string | undefined
 	protected _redisConfig: RedisOptions | undefined
-	protected _cacheNamespace: string
-	protected _defaultExpiresIn: number
+	protected _namespace: string
+	protected _expiresIn: number
 	protected _enableDebug: boolean
 
 	constructor({
 		redisConnection,
 		redisUrl,
 		redisConfig,
-		cacheNamespace = 'cache',
-		defaultExpiresIn = 300,
+		namespace = 'cachexs',
+		expiresIn = 300,
 		enableDebug = false,
 	}: CacheXSConfig = {}) {
 		this.configureCacheXS({
 			redisConnection,
 			redisUrl,
 			redisConfig,
-			cacheNamespace,
-			defaultExpiresIn,
+			namespace,
+			expiresIn,
 			enableDebug,
 		})
 	}
@@ -34,8 +33,8 @@ export default class CacheXS {
 		redisConnection,
 		redisConfig,
 		redisUrl,
-		cacheNamespace = 'cache',
-		defaultExpiresIn = 300,
+		namespace = 'cachexs',
+		expiresIn = 300,
 		enableDebug = false,
 	}: CacheXSConfig) {
 		if (redisConnection) {
@@ -57,8 +56,8 @@ export default class CacheXS {
 			}
 		}
 
-		this._cacheNamespace = cacheNamespace
-		this._defaultExpiresIn = defaultExpiresIn
+		this._namespace = namespace
+		this._expiresIn = expiresIn
 		this._enableDebug = enableDebug
 	}
 
@@ -66,21 +65,21 @@ export default class CacheXS {
 		redisConnection,
 		redisConfig,
 		redisUrl,
-		cacheNamespace = 'cache',
-		defaultExpiresIn = 300,
+		namespace = 'cachexs',
+		expiresIn = 300,
 		enableDebug = false,
 	}: CacheXSConfig): CacheXS {
-		this.configureCacheXS({ redisConnection, redisConfig, redisUrl, cacheNamespace, defaultExpiresIn, enableDebug })
+		this.configureCacheXS({ redisConnection, redisConfig, redisUrl, namespace, expiresIn, enableDebug })
 		return this
 	}
 
-	public concatenateKeyWithNamespace(key: string, namespace?: string): string {
-		const cacheNamespace = this._cacheNamespace
-		return namespace ? `${cacheNamespace}:${namespace}:${key}` : `${cacheNamespace}:${key}`
+	public concatenateKey(key: string): string {
+		const namespace = this._namespace
+		return namespace.length > 0 ? `${namespace}:${key}` : key
 	}
 
-	public async get<T>(key: string, namespace?: string): Promise<T | null> {
-		const keyWithNamespace = this.concatenateKeyWithNamespace(key, namespace)
+	public async get<T>(key: string): Promise<T | null> {
+		const keyWithNamespace = this.concatenateKey(key)
 
 		const value = await this._redisConnection.get(keyWithNamespace)
 
@@ -101,20 +100,19 @@ export default class CacheXS {
 	}
 
 	public async set<T>(key: string, value: T, options?: SetOptions): Promise<void> {
-		const namespace = options?.namespace
-		const expiresIn = options?.expiresIn ?? this._defaultExpiresIn
-		const keyWithNamespace = this.concatenateKeyWithNamespace(key, namespace)
+		const expiresIn = options?.expiresIn ?? this._expiresIn
+		const keyWithNamespace = this.concatenateKey(key)
+		const parsedValue = typeof value === 'object' ? JSON.stringify(value) : (value as string | number | Buffer)
 
-		await this._redisConnection.set(keyWithNamespace, JSON.stringify(value), 'EX', expiresIn)
+		await this._redisConnection.set(keyWithNamespace, parsedValue, 'EX', expiresIn)
 
 		if (this._enableDebug) {
 			console.debug(`CacheXS -> Set (For: ${expiresIn} Sec.) -> ${keyWithNamespace}: ${value}`)
 		}
 	}
 
-	public async setForever<T>(key: string, value: T, options?: SetForeverOptions): Promise<void> {
-		const namespace = options?.namespace
-		const keyWithNamespace = this.concatenateKeyWithNamespace(key, namespace)
+	public async setForever<T>(key: string, value: T): Promise<void> {
+		const keyWithNamespace = this.concatenateKey(key)
 
 		await this._redisConnection.set(keyWithNamespace, JSON.stringify(value))
 
@@ -124,9 +122,8 @@ export default class CacheXS {
 	}
 
 	public async getOrSet<T>(key: string, fallbackValue: T, options?: SetOptions): Promise<T> {
-		const namespace = options?.namespace
-		const expiresIn = options?.expiresIn ?? this._defaultExpiresIn
-		const keyWithNamespace = this.concatenateKeyWithNamespace(key, namespace)
+		const expiresIn = options?.expiresIn ?? this._expiresIn
+		const keyWithNamespace = this.concatenateKey(key)
 
 		const value = await this.get<T>(keyWithNamespace)
 
@@ -147,9 +144,8 @@ export default class CacheXS {
 		return fallbackValue
 	}
 
-	public async getOrSetForever<T>(key: string, fallbackValue: T, options?: SetForeverOptions): Promise<T> {
-		const namespace = options?.namespace
-		const keyWithNamespace = this.concatenateKeyWithNamespace(key, namespace)
+	public async getOrSetForever<T>(key: string, fallbackValue: T): Promise<T> {
+		const keyWithNamespace = this.concatenateKey(key)
 
 		const value = await this.get<T>(keyWithNamespace)
 
@@ -169,8 +165,30 @@ export default class CacheXS {
 		return fallbackValue
 	}
 
-	public async delete(key: string, namespace?: string): Promise<void> {
-		const keyWithNamespace = this.concatenateKeyWithNamespace(key, namespace)
+	public async has(key: string): Promise<boolean> {
+		const keyWithNamespace = this.concatenateKey(key)
+		const isExists = (await this._redisConnection.exists(keyWithNamespace)) === 1
+
+		if (this._enableDebug) {
+			console.debug(`CacheXS -> Has -> ${keyWithNamespace}? ${isExists}`)
+		}
+
+		return isExists
+	}
+
+	public async missing(key: string): Promise<boolean> {
+		const keyWithNamespace = this.concatenateKey(key)
+		const isExists = (await this._redisConnection.exists(keyWithNamespace)) === 0
+
+		if (this._enableDebug) {
+			console.debug(`CacheXS -> Missing -> ${keyWithNamespace}? ${isExists}`)
+		}
+
+		return isExists
+	}
+
+	public async delete(key: string): Promise<void> {
+		const keyWithNamespace = this.concatenateKey(key)
 
 		await this._redisConnection.del(keyWithNamespace)
 
@@ -179,13 +197,23 @@ export default class CacheXS {
 		}
 	}
 
-	public async deleteAll(): Promise<void> {
-		const keys = await this._redisConnection.keys(`${this._cacheNamespace}:*`)
+	public async deleteMany(keys: string[]): Promise<void> {
+		const keysWithNamespace = keys.map((key) => this.concatenateKey(key))
+
+		await this._redisConnection.del(keysWithNamespace)
+
+		if (this._enableDebug) {
+			console.debug(`CacheXS -> Delete Multiple -> ${keys.join(', ')}`)
+		}
+	}
+
+	public async clear(): Promise<void> {
+		const keys = await this._redisConnection.keys(`${this._namespace}:*`)
 
 		await this._redisConnection.del(keys)
 
 		if (this._enableDebug) {
-			console.debug('CacheXS -> Delete All')
+			console.debug('CacheXS -> Clear All Cache')
 		}
 	}
 
@@ -197,12 +225,12 @@ export default class CacheXS {
 		return this._redisConfig
 	}
 
-	public get defaultExpiresIn(): number {
-		return this._defaultExpiresIn
+	public get expiresIn(): number {
+		return this._expiresIn
 	}
 
-	public get cacheNamespace(): string {
-		return this._cacheNamespace
+	public get namespace(): string {
+		return this._namespace
 	}
 
 	public get isDebugEnabled(): boolean {

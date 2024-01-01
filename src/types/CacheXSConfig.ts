@@ -4,7 +4,7 @@ export type CacheXSConfig = {
 	redisConnection?: Redis
 	redisUrl?: string
 	redisConfig?: RedisOptions
-	cacheNamespace?: string
-	defaultExpiresIn?: number
+	namespace?: string
+	expiresIn?: number
 	enableDebug?: boolean
 }
