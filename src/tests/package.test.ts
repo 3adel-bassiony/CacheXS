@@ -197,13 +197,13 @@ describe('Should get the cache class instance details', () => {
 		expect(cache.redisConfig).toMatchObject(redisConfig)
 		expect(cache.redisUrl).toBeUndefined()
 		expect(cache.expiresIn).toBe(300)
-		expect(cache.namespace).toBe('cachexs')
+		expect(cache.namespace).toBe('cacheXS')
 		expect(cache.isDebugEnabled).toBe(false)
 	})
 
 	it('Should test the concatenateKey method', async () => {
 		const cache = new CacheXS()
-		expect(cache.concatenateKey('foo')).toBe('cachexs:foo')
-		expect(cache.concatenateKey('foo:bar')).toBe('cachexs:foo:bar')
+		expect(cache.concatenateKey('foo')).toBe('cacheXS:foo')
+		expect(cache.concatenateKey('foo:bar')).toBe('cacheXS:foo:bar')
 	})
 })
