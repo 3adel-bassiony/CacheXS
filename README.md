@@ -130,8 +130,6 @@ The CacheXS package comes with a comprehensive set of features designed to make 
         const objectValue = await cacheXS.get<MyObject>('myKey') // -> { name: 'John', age: 30 }
         ```
 
-        &nbsp;
-
     -   `set`: Sets a value in the cache.
 
         ```typescript
@@ -140,15 +138,11 @@ The CacheXS package comes with a comprehensive set of features designed to make 
         await cacheXS.set('myKey', { name: 'John', age: 30 }, { expiresIn: 360 })
         ```
 
-        &nbsp;
-
     -   `setForever` Sets a value in the cache forever
 
         ```typescript
         await cacheXS.setForever('user', { name: 'John Doe', age: 30 })
         ```
-
-        &nbsp;
 
     -   `getOrSet` Retrieves the value associated with the specified key from the cache. If the value does not exist, it sets the value to the provided fallback value and returns it.
 
@@ -156,15 +150,11 @@ The CacheXS package comes with a comprehensive set of features designed to make 
         const username = await cacheXS.getOrSet('myKey', 'myValue')
         ```
 
-        &nbsp;
-
     -   `getOrSetForever` Retrieves the value associated with the specified key from the cache. If the value does not exist, it sets the specified fallback value in the cache and returns it.
 
         ```typescript
         value = await cacheXS.getOrSetForever('myKey', 'defaultValue')
         ```
-
-        &nbsp;
 
     -   `delete` Deletes a cache entry by its key.
 
@@ -172,15 +162,11 @@ The CacheXS package comes with a comprehensive set of features designed to make 
         await cacheXS.delete('myKey')
         ```
 
-        &nbsp;
-
     -   `deleteMany` Deletes multiple cache entries specified by the given keys.
 
         ```typescript
         await cacheXS.deleteMany(['myKey', 'myKey2', 'myKey3'])
         ```
-
-        &nbsp;
 
     -   `clear` Clears all cache entries in the CacheXS instance.
 
@@ -188,15 +174,11 @@ The CacheXS package comes with a comprehensive set of features designed to make 
         await cacheXS.clear()
         ```
 
-        &nbsp;
-
     -   `has` Checks if a key exists in the cache.
 
         ```typescript
         await cacheXS.has('myKey') // -> True || False
         ```
-
-        &nbsp;
 
     -   `missing` Checks if a key is missing in the cache.
 
@@ -204,15 +186,11 @@ The CacheXS package comes with a comprehensive set of features designed to make 
         await cacheXS.missing('myKey') // -> True || False
         ```
 
-        &nbsp;
-
     -   `concatenateKey` Concatenates the given key with the namespace and returns the resulting string.
 
         ```typescript
         await cacheXS.concatenateKey('myKey') // -> 'CacheXS:myKey'
         ```
-
-        &nbsp;
 
     -   `redisConnection` Gets the Redis connection.
 
@@ -220,15 +198,11 @@ The CacheXS package comes with a comprehensive set of features designed to make 
         cacheXS.redisConnection // -> ioredis instance
         ```
 
-        &nbsp;
-
     -   `redisUrl` Gets the Redis URL.
 
         ```typescript
         cacheXS.redisUrl // -> 'redis://user:pass@localhost:6379'
         ```
-
-        &nbsp;
 
     -   `redisConfig` Gets the Redis configuration.
 
@@ -236,23 +210,17 @@ The CacheXS package comes with a comprehensive set of features designed to make 
         cacheXS.redisConfig // -> { host: 'localhost', port: 6379, password: '' }
         ```
 
-        &nbsp;
-
     -   `expiresIn` Gets the expiration time in seconds.
 
         ```typescript
         cacheXS.expiresIn // -> 60
         ```
 
-    &nbsp;
-
     -   `namespace` Gets the namespace of the cache.
 
         ```typescript
         cacheXS.namespace // -> 'CacheXS
         ```
-
-    &nbsp;
 
     -   `isDebugEnabled` Gets a value indicating whether debug mode is enabled.
 
