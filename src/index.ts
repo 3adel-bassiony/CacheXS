@@ -259,7 +259,7 @@ export default class CacheXS {
 	 * await setForever("username", "JohnDoe");
 	 *
 	 * // Set an object value in the cache
-	 * await setForever("user", { name: "John Doe", age: 30 });
+	 * await cache.setForever("user", { name: "John Doe", age: 30 });
 	 */
 	public async setForever<T>(key: string, value: T): Promise<void> {
 		const keyWithNamespace = this.concatenateKey(key)
@@ -340,48 +340,6 @@ export default class CacheXS {
 	}
 
 	/**
-	 * Checks if a key exists in the cache.
-	 * @param key - The key to check.
-	 * @returns A promise that resolves to a boolean indicating whether the key exists in the cache.
-	 * @example
-	 * const cache = new CacheXS();
-	 * const exists = await cache.has("myKey");
-	 * console.log(exists); // true or false
-	 */
-	public async has(key: string): Promise<boolean> {
-		const keyWithNamespace = this.concatenateKey(key)
-		const isExists = (await this._redisConnection.exists(keyWithNamespace)) === 1
-
-		if (this._enableDebug) {
-			console.debug(`CacheXS -> Has -> ${keyWithNamespace}? ${isExists}`)
-		}
-
-		return isExists
-	}
-
-	/**
-	 * Checks if a key is missing in the cache.
-	 *
-	 * @param key - The key to check.
-	 * @returns A promise that resolves to a boolean indicating whether the key is missing or not.
-	 *
-	 * @example
-	 * const cache = new CacheXS();
-	 * const isMissing = await cache.missing("myKey");
-	 * console.log(isMissing); // true or false
-	 */
-	public async missing(key: string): Promise<boolean> {
-		const keyWithNamespace = this.concatenateKey(key)
-		const isExists = (await this._redisConnection.exists(keyWithNamespace)) === 0
-
-		if (this._enableDebug) {
-			console.debug(`CacheXS -> Missing -> ${keyWithNamespace}? ${isExists}`)
-		}
-
-		return isExists
-	}
-
-	/**
 	 * Deletes a cache entry by its key.
 	 *
 	 * @param key The key of the cache entry to delete.
@@ -438,6 +396,61 @@ export default class CacheXS {
 		if (this._enableDebug) {
 			console.debug('CacheXS -> Clear All Cache')
 		}
+	}
+
+	/**
+	 * Checks if a key exists in the cache.
+	 * @param key - The key to check.
+	 * @returns A promise that resolves to a boolean indicating whether the key exists in the cache.
+	 * @example
+	 * const cache = new CacheXS();
+	 * const exists = await cache.has("myKey");
+	 * console.log(exists); // true or false
+	 */
+	public async has(key: string): Promise<boolean> {
+		const keyWithNamespace = this.concatenateKey(key)
+		const isExists = (await this._redisConnection.exists(keyWithNamespace)) === 1
+
+		if (this._enableDebug) {
+			console.debug(`CacheXS -> Has -> ${keyWithNamespace}? ${isExists}`)
+		}
+
+		return isExists
+	}
+
+	/**
+	 * Checks if a key is missing in the cache.
+	 *
+	 * @param key - The key to check.
+	 * @returns A promise that resolves to a boolean indicating whether the key is missing or not.
+	 *
+	 * @example
+	 * const cache = new CacheXS();
+	 * const isMissing = await cache.missing("myKey");
+	 * console.log(isMissing); // true or false
+	 */
+	public async missing(key: string): Promise<boolean> {
+		const keyWithNamespace = this.concatenateKey(key)
+		const isExists = (await this._redisConnection.exists(keyWithNamespace)) === 0
+
+		if (this._enableDebug) {
+			console.debug(`CacheXS -> Missing -> ${keyWithNamespace}? ${isExists}`)
+		}
+
+		return isExists
+	}
+
+	/**
+	 * Gets the Redis connection.
+	 *
+	 * @returns {Redis} The Redis connection.
+	 * @example
+	 * const cache = new CacheXS();
+	 * const redis = cache.redisConnection;
+	 * redis.set('key', 'value');
+	 */
+	public get redisConnection(): Redis {
+		return this._redisConnection
 	}
 
 	/**
