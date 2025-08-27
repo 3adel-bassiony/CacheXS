@@ -372,6 +372,10 @@ export default class CacheXS {
 	 * await cache.deleteMany(keys);
 	 */
 	public async deleteMany(keys: string[]): Promise<void> {
+		if (keys.length === 0) {
+			return
+		}
+
 		const keysWithNamespace = keys.map((key) => this.concatenateKey(key))
 
 		await this._redisConnection.del(keysWithNamespace)
@@ -391,7 +395,9 @@ export default class CacheXS {
 	public async clear(): Promise<void> {
 		const keys = await this._redisConnection.keys(`${this._namespace}:*`)
 
-		await this._redisConnection.del(keys)
+		if (keys.length > 0) {
+			await this._redisConnection.del(keys)
+		}
 
 		if (this._enableDebug) {
 			console.debug('CacheXS -> Clear All Cache')
@@ -438,6 +444,146 @@ export default class CacheXS {
 		}
 
 		return isExists
+	}
+
+	/**
+	 * Finds Redis keys matching a pattern using SCAN instead of KEYS
+	 *
+	 * This function is a more efficient alternative to Redis.keys() for production environments.
+	 * It uses the SCAN command which is non-blocking and designed for production use.
+	 *
+	 * @param {string} pattern - The pattern to match (e.g., "user:*", "session:*:active")
+	 * @param {number} count - The number of keys to scan per iteration (default: 100)
+	 * @returns {Promise<string[]>} Array of matching keys (without namespace prefix)
+	 *
+	 * @example
+	 * const cache = new CacheXS();
+	 * // Find all user keys
+	 * const userKeys = await cache.scan("user:*");
+	 * console.log(userKeys); // ["user:123", "user:456"]
+	 *
+	 * // Find keys with custom count
+	 * const sessionKeys = await cache.scan("session:*", 50);
+	 */
+	public async scan(pattern: string, count: number = 100): Promise<string[]> {
+		let cursor = '0'
+		const keys: string[] = []
+		const patternWithNamespace = this.concatenateKey(pattern)
+
+		do {
+			// SCAN returns an array where the first element is the new cursor
+			// and the second element is an array of matched keys
+			const [nextCursor, matchedKeys] = (await this._redisConnection.scan(
+				cursor,
+				'MATCH',
+				patternWithNamespace,
+				'COUNT',
+				count
+			)) as [string, string[]]
+
+			cursor = nextCursor
+
+			// Remove namespace prefix from results
+			const keysWithoutNamespace = matchedKeys.map((key) =>
+				this._namespace.length > 0 ? key.replace(`${this._namespace}:`, '') : key
+			)
+			keys.push(...keysWithoutNamespace)
+		} while (cursor !== '0')
+
+		if (this._enableDebug) {
+			console.debug(`CacheXS -> Scan -> Pattern: ${pattern}, Found: ${keys.length} keys`)
+		}
+
+		return keys
+	}
+
+	/**
+	 * Finds Redis keys matching a pattern using the KEYS command
+	 *
+	 * Note: This method uses the KEYS command which blocks Redis while executing.
+	 * For production environments with large datasets, consider using scan() instead.
+	 *
+	 * @param {string} pattern - The pattern to match (e.g., "user:*", "session:*:active")
+	 * @returns {Promise<string[]>} Array of matching keys (without namespace prefix)
+	 *
+	 * @example
+	 * const cache = new CacheXS();
+	 * // Find all user keys
+	 * const userKeys = await cache.keys("user:*");
+	 * console.log(userKeys); // ["user:123", "user:456"]
+	 */
+	public async keys(pattern: string): Promise<string[]> {
+		const patternWithNamespace = this.concatenateKey(pattern)
+		const keys = await this._redisConnection.keys(patternWithNamespace)
+
+		// Remove namespace prefix from results
+		const keysWithoutNamespace = keys.map((key) =>
+			this._namespace.length > 0 ? key.replace(`${this._namespace}:`, '') : key
+		)
+
+		if (this._enableDebug) {
+			console.debug(`CacheXS -> Keys -> Pattern: ${pattern}, Found: ${keysWithoutNamespace.length} keys`)
+		}
+
+		return keysWithoutNamespace
+	}
+
+	/**
+	 * Retrieves multiple values by pattern matching
+	 *
+	 * @param {string} pattern - The pattern to match (e.g., "user:*", "session:*:active")
+	 * @param {boolean} useScan - Whether to use SCAN (true) or KEYS (false) command (default: true)
+	 * @returns {Promise<{[key: string]: T | null}>} Object with keys and their values
+	 *
+	 * @example
+	 * const cache = new CacheXS();
+	 * // Get all user data
+	 * const userData = await cache.getByPattern<User>("user:*");
+	 * console.log(userData); // { "user:123": {...}, "user:456": {...} }
+	 */
+	public async getByPattern<T>(pattern: string, useScan: boolean = true): Promise<{ [key: string]: T | null }> {
+		const matchingKeys = useScan ? await this.scan(pattern) : await this.keys(pattern)
+		const result: { [key: string]: T | null } = {}
+
+		// Use Promise.all for concurrent fetching
+		const values = await Promise.all(matchingKeys.map((key) => this.get<T>(key)))
+
+		matchingKeys.forEach((key, index) => {
+			result[key] = values[index]
+		})
+
+		if (this._enableDebug) {
+			console.debug(`CacheXS -> Get By Pattern -> Pattern: ${pattern}, Retrieved: ${matchingKeys.length} items`)
+		}
+
+		return result
+	}
+
+	/**
+	 * Deletes keys matching a pattern
+	 *
+	 * @param {string} pattern - The pattern to match (e.g., "user:*", "session:*:active")
+	 * @param {boolean} useScan - Whether to use SCAN (true) or KEYS (false) command (default: true)
+	 * @returns {Promise<number>} Number of keys deleted
+	 *
+	 * @example
+	 * const cache = new CacheXS();
+	 * // Delete all expired sessions
+	 * const deletedCount = await cache.deleteByPattern("session:*:expired");
+	 * console.log(`Deleted ${deletedCount} expired sessions`);
+	 */
+	public async deleteByPattern(pattern: string, useScan: boolean = true): Promise<number> {
+		const matchingKeys = useScan ? await this.scan(pattern) : await this.keys(pattern)
+
+		if (matchingKeys.length > 0) {
+			await this.deleteMany(matchingKeys)
+		}
+
+		if (this._enableDebug) {
+			console.debug(`CacheXS -> Delete By Pattern -> Pattern: ${pattern}, Deleted: ${matchingKeys.length} keys`)
+		}
+
+		return matchingKeys.length
 	}
 
 	/**
