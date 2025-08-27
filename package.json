@@ -49,6 +49,6 @@
 	],
 	"dependencies": {
 		"@vitest/ui": "^3.2.4",
-		"ioredis": "^5.3.2"
+		"ioredis": "^5.7.0"
 	}
 }
