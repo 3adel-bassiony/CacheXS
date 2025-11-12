@@ -6,7 +6,7 @@
 ![gh-workflow-image](https://img.shields.io/github/actions/workflow/status/3adel-bassiony/cachexs/main.yml)
 ![NPM](https://img.shields.io/npm/l/cachexs)
 
-Discover CacheXS, a remarkably efficient library for JavaScript and Node.js, ideal for developers prioritizing performance and simplicity. Written in TypeScript, and it uses the ioredis library under the hood, it offers seamless integration for both TypeScript and JavaScript projects. Its compact size belies its powerful functionality, making it perfect for lightweight, modern applications. With ESM compatibility, CacheXS aligns with contemporary development practices, ensuring its utility in a range of projects from small-scale to complex.
+Discover CacheXS, a remarkably efficient library for JavaScript and Bun, ideal for developers prioritizing performance and simplicity. Written in TypeScript, and it uses bun redis under the hood, it offers seamless integration for both TypeScript and JavaScript projects. Its compact size belies its powerful functionality, making it perfect for lightweight, modern applications. With ESM compatibility, CacheXS aligns with contemporary development practices, ensuring its utility in a range of projects from small-scale to complex.
 
 &nbsp;
 
@@ -26,28 +26,8 @@ Discover CacheXS, a remarkably efficient library for JavaScript and Node.js, ide
 
 Getting up and running with CacheXS is a breeze. Choose your preferred package manager from the options below and follow the simple installation steps:
 
-#### NPM
-
-```bash
-npm i cachexs
-```
-
-#### Bun
-
 ```bash
 bun i cachexs
-```
-
-#### Yarn
-
-```bash
-yarn add cachexs
-```
-
-#### Pnpm
-
-```bash
-pnpm install cachexs
 ```
 
 &nbsp;
@@ -66,10 +46,34 @@ Then create a new instance for CacheXS and pass the configuration to it:
 
 ```typescript
 const cacheXS = new CacheXS({
-	redisConfig: {
-		host: 'localhost',
-		port: 6379,
-		password: '',
+	redisOptions: {
+		// Connection timeout in milliseconds (default: 10000)
+		connectionTimeout: 5000,
+
+		// Idle timeout in milliseconds (default: 0 = no timeout)
+		idleTimeout: 30000,
+
+		// Whether to automatically reconnect on disconnection (default: true)
+		autoReconnect: true,
+
+		// Maximum number of reconnection attempts (default: 10)
+		maxRetries: 10,
+
+		// Whether to queue commands when disconnected (default: true)
+		enableOfflineQueue: true,
+
+		// Whether to automatically pipeline commands (default: true)
+		enableAutoPipelining: true,
+
+		// TLS options (default: false)
+		tls: true,
+		// Alternatively, provide custom TLS config:
+		// tls: {
+		//   rejectUnauthorized: true,
+		//   ca: "path/to/ca.pem",
+		//   cert: "path/to/cert.pem",
+		//   key: "path/to/key.pem",
+		// }
 	},
 })
 ```
@@ -102,7 +106,7 @@ The CacheXS package comes with a comprehensive set of features designed to make 
 
         ```typescript
         const cacheXS = new CacheXS({
-        	redisConnection: ioredis,
+        	redisClient: redis,
         	namespace: 'myCache',
         	enableDebug: true,
         })
@@ -114,7 +118,7 @@ The CacheXS package comes with a comprehensive set of features designed to make 
         const cacheXS = new CacheXS()
 
         cacheXS.configure({
-        	redisConnection: ioredis,
+        	redisClient: redis,
         	namespace: 'myCache',
         	enableDebug: true,
         })
@@ -156,6 +160,20 @@ The CacheXS package comes with a comprehensive set of features designed to make 
         value = await cacheXS.getOrSetForever('myKey', 'defaultValue')
         ```
 
+    -   `increment` Increments the value of a key by one. If the key does not exist, it will be set to 0 before performing the operation. Returns the new value after incrementing.
+
+        ```typescript
+        const newValue = await cacheXS.increment('count') // -> 1 (if key doesn't exist)
+        const nextValue = await cacheXS.increment('count') // -> 2
+        ```
+
+    -   `decrement` Decrements the value of a key by one. If the key does not exist, it will be set to 0 before performing the operation. Returns the new value after decrementing.
+
+        ```typescript
+        const newValue = await cacheXS.decrement('count') // -> -1 (if key doesn't exist)
+        const nextValue = await cacheXS.decrement('count') // -> -2
+        ```
+
     -   `delete` Deletes a cache entry by its key.
 
         ```typescript
@@ -192,10 +210,10 @@ The CacheXS package comes with a comprehensive set of features designed to make 
         await cacheXS.concatenateKey('myKey') // -> 'CacheXS:myKey'
         ```
 
-    -   `redisConnection` Gets the Redis connection.
+    -   `redisClient` Gets the Redis connection.
 
         ```typescript
-        cacheXS.redisConnection // -> ioredis instance
+        cacheXS.redisClient // -> Bun redis instance
         ```
 
     -   `redisUrl` Gets the Redis URL.
@@ -204,10 +222,10 @@ The CacheXS package comes with a comprehensive set of features designed to make 
         cacheXS.redisUrl // -> 'redis://user:pass@localhost:6379'
         ```
 
-    -   `redisConfig` Gets the Redis configuration.
+    -   `redisOptions` Gets the Redis configuration.
 
         ```typescript
-        cacheXS.redisConfig // -> { host: 'localhost', port: 6379, password: '' }
+        cacheXS.redisOptions // -> { host: 'localhost', port: 6379, password: '' }
         ```
 
     -   `expiresIn` Gets the expiration time in seconds.
@@ -227,6 +245,10 @@ The CacheXS package comes with a comprehensive set of features designed to make 
         ```typescript
         cacheXS.isDebugEnabled // -> True || False
         ```
+
+    ```
+
+    ```
 
 &nbsp;
 

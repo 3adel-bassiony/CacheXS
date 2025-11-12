@@ -1,9 +1,9 @@
-import { Redis, RedisOptions } from 'ioredis'
+import { RedisClient, RedisOptions } from 'bun'
 
 export type CacheXSConfig = {
-	redisConnection?: Redis
+	redisClient?: RedisClient
 	redisUrl?: string
-	redisConfig?: RedisOptions
+	redisOptions?: RedisOptions
 	namespace?: string
 	expiresIn?: number
 	enableDebug?: boolean

@@ -1,13 +1,7 @@
-import { Redis } from 'ioredis'
-import { describe, expect, it } from 'vitest'
+import { RedisClient } from 'bun'
+import { describe, expect, it } from 'bun:test'
 
 import CacheXS from '../index'
-
-const redisConfig = {
-	host: 'localhost',
-	port: 6379,
-	password: '',
-}
 
 const redisUrl = 'redis://localhost:6379'
 
@@ -16,22 +10,22 @@ describe('Create Cache Instance', () => {
 		const cache = new CacheXS()
 
 		expect(cache).toBeInstanceOf(CacheXS)
-		expect(cache.redisConfig).toStrictEqual(redisConfig)
+		expect(cache.namespace).toStrictEqual('cacheXS')
+		expect(cache.expiresIn).toStrictEqual(300)
+		expect(cache.isDebugEnabled).toStrictEqual(false)
 	})
 
 	it('Should create a new instance for Cache class with redis connection', async () => {
+		const bunRedis = new RedisClient(redisUrl)
+
 		const cache = new CacheXS({
-			redisConnection: new Redis(redisConfig),
+			redisClient: bunRedis,
 		})
 
 		expect(cache).toBeInstanceOf(CacheXS)
-		expect(cache.redisConfig).toMatchObject(redisConfig)
-	})
-
-	it('Should create a new instance for Cache class with redis configuration', async () => {
-		const cache = new CacheXS({ redisConfig })
-		expect(cache).toBeInstanceOf(CacheXS)
-		expect(cache.redisConfig).toMatchObject(redisConfig)
+		expect(cache.namespace).toStrictEqual('cacheXS')
+		expect(cache.expiresIn).toStrictEqual(300)
+		expect(cache.isDebugEnabled).toStrictEqual(false)
 	})
 
 	it('Should create a new instance for Cache class with redis url', async () => {
@@ -55,7 +49,8 @@ describe('Create Cache Instance', () => {
 			namespace: 'test',
 		})
 		await cache.set('foo', 'bar')
-		expect(await cache.get('foo')).toBe('bar')
+		const value = await cache.get('foo')
+		expect(value).toBe('bar')
 	})
 
 	it('Should create a new instance for Cache class and change the default expires in seconds', async () => {
@@ -63,7 +58,8 @@ describe('Create Cache Instance', () => {
 			expiresIn: 1,
 		})
 		await cache.set('foo', 'bar')
-		expect(await cache.get('foo')).toBe('bar')
+		const value = await cache.get('foo')
+		expect(value).toBe('bar')
 		await new Promise((resolve) => setTimeout(resolve, 1000))
 		expect(await cache.get('foo')).toBeNull()
 	})
@@ -71,7 +67,7 @@ describe('Create Cache Instance', () => {
 	it('Should get the cache class instance details', async () => {
 		const cache = new CacheXS()
 		expect(cache).toBeInstanceOf(CacheXS)
-		expect(cache.redisConfig).toMatchObject(redisConfig)
+		// expect(cache.redisConfig).toMatchObject(redisConfig)
 		expect(cache.redisUrl).toBeUndefined()
 		expect(cache.expiresIn).toBe(300)
 		expect(cache.namespace).toBe('cacheXS')
@@ -89,19 +85,67 @@ describe('Set Cache', () => {
 	it('Should set a value in cache', async () => {
 		const cache = new CacheXS()
 		await cache.set('foo', 'bar')
-		expect(await cache.get('foo')).toBe('bar')
+		const value = await cache.get('foo')
+		expect(value).toBe('bar')
+	})
+
+	it('Should set a value with object in cache', async () => {
+		const cache = new CacheXS()
+
+		const object = { name: 'John', age: 30 }
+		await cache.set('foo', object)
+		const value = await cache.get<typeof object>('foo')
+		expect(value).toStrictEqual(object)
+	})
+
+	it('Should set a value with number in cache', async () => {
+		const cache = new CacheXS()
+		await cache.set('foo', 123)
+		const value = await cache.get<number>('foo')
+		expect(value).toBe(123)
+	})
+
+	it('Should set a value with string in cache', async () => {
+		const cache = new CacheXS()
+		await cache.set('foo', 'bar')
+		const value = await cache.get<string>('foo')
+		expect(value).toBe('bar')
+	})
+
+	it('Should set a value with boolean in cache', async () => {
+		const cache = new CacheXS()
+		await cache.set('foo', true)
+		const value = await cache.get<boolean>('foo')
+
+		expect(value).toBe(true)
+	})
+
+	it('Should set a value with null in cache', async () => {
+		const cache = new CacheXS()
+		await cache.set('foo', null)
+		const value = await cache.get<null>('foo')
+		expect(value).toBeNull()
+	})
+
+	it('Should set a value with undefined in cache', async () => {
+		const cache = new CacheXS()
+		await cache.set('foo', undefined)
+		const value = await cache.get<undefined>('foo')
+		expect(value).toBeNull()
 	})
 
 	it('Should set a value in cache with nested namespace', async () => {
 		const cache = new CacheXS()
 		await cache.set('foo:bar', 'baz')
-		expect(await cache.get('foo:bar')).toBe('baz')
+		const value = await cache.get('foo:bar')
+		expect(value).toBe('baz')
 	})
 
 	it('Should set a value in cache with expiration', async () => {
 		const cache = new CacheXS()
 		await cache.set('foo', 'bar', { expiresIn: 1 })
-		expect(await cache.get('foo')).toBe('bar')
+		const value = await cache.get('foo')
+		expect(value).toBe('bar')
 		await new Promise((resolve) => setTimeout(resolve, 1000))
 		expect(await cache.get('foo')).toBeNull()
 	})
@@ -109,13 +153,15 @@ describe('Set Cache', () => {
 	it('Should set a value in cache forever', async () => {
 		const cache = new CacheXS()
 		await cache.setForever('foo', 'bar')
-		expect(await cache.get('foo')).toBe('bar')
+		const value = await cache.get('foo')
+		expect(value).toBe('bar')
 	})
 
 	it('Should set a value in cache forever with nested namespace', async () => {
 		const cache = new CacheXS()
 		await cache.setForever('foo:bar', 'baz')
-		expect(await cache.get('foo:bar')).toBe('baz')
+		const value = await cache.get('foo:bar')
+		expect(value).toBe('baz')
 	})
 })
 
@@ -123,19 +169,22 @@ describe('Get Cache', () => {
 	it('Should get a value from cache', async () => {
 		const cache = new CacheXS()
 		await cache.set('foo', 'bar')
-		expect(await cache.get('foo')).toBe('bar')
+		const value = await cache.get('foo')
+		expect(value).toBe('bar')
 	})
 
 	it('Should get a value from cache with nested namespace', async () => {
 		const cache = new CacheXS()
 		await cache.set('foo:bar', 'baz')
-		expect(await cache.get('foo:bar')).toBe('baz')
+		const value = await cache.get('foo:bar')
+		expect(value).toBe('baz')
 	})
 
 	it('Should get a value from cache with expiration', async () => {
 		const cache = new CacheXS()
 		await cache.set('foo', 'bar', { expiresIn: 1 })
-		expect(await cache.get('foo')).toBe('bar')
+		const value = await cache.get('foo')
+		expect(value).toBe('bar')
 		await new Promise((resolve) => setTimeout(resolve, 1000))
 		expect(await cache.get('foo')).toBeNull()
 	})
@@ -143,66 +192,111 @@ describe('Get Cache', () => {
 	it('Should get a value from cache forever', async () => {
 		const cache = new CacheXS()
 		await cache.setForever('foo', 'bar')
-		expect(await cache.get('foo')).toBe('bar')
+		const value = await cache.get('foo')
+		expect(value).toBe('bar')
 	})
 
 	it('Should get a value from cache forever with namespace', async () => {
 		const cache = new CacheXS()
 		await cache.setForever('foo:bar', 'baz')
-		expect(await cache.get('foo:bar')).toBe('baz')
+		const value = await cache.get('foo:bar')
+		expect(value).toBe('baz')
 	})
 
 	it('Should check if the key is exists in cache', async () => {
 		const cache = new CacheXS()
 		await cache.set('foo', 'bar')
-		expect(await cache.has('foo')).toBe(true)
+		const isExists = await cache.has('foo')
+		expect(isExists).toBe(true)
 	})
 
 	it('Should check if the key is missing in cache', async () => {
 		const cache = new CacheXS()
-		expect(await cache.missing('foo')).toBe(false)
+		const isMissing = await cache.missing('foo')
+		expect(isMissing).toBe(true)
+	})
+})
+
+describe('Increment & Decrement Cache', () => {
+	it('Should increment the value of a key by one', async () => {
+		const cache = new CacheXS()
+		await cache.set('foo', 0)
+		const value = await cache.increment('foo')
+		expect(value).toBe(1)
+	})
+
+	it('Should decrement the value of a key by one', async () => {
+		const cache = new CacheXS()
+		await cache.set('foo', 1)
+		const value = await cache.decrement('foo')
+		expect(value).toBe(0)
 	})
 })
 
 describe('Delete & Clear Cache', () => {
 	it('Should delete an item from cache', async () => {
 		const cache = new CacheXS()
+
 		await cache.set('foo', 'bar')
-		expect(await cache.get('foo')).toBe('bar')
+		const value = await cache.get('foo')
+		expect(value).toBe('bar')
+
 		await cache.delete('foo')
-		expect(await cache.get('foo')).toBeNull()
+
+		const valueAfterDelete = await cache.get('foo')
+		expect(valueAfterDelete).toBeNull()
 	})
 
 	it('Should delete an item from cache with nested namespace', async () => {
 		const cache = new CacheXS({ namespace: 'test' })
+
 		await cache.set('foo:bar', 'baz')
-		expect(await cache.get('foo:bar')).toBe('baz')
+		const value = await cache.get('foo:bar')
+		expect(value).toBe('baz')
+
 		await cache.delete('foo:bar')
-		await cache.delete('foo')
-		expect(await cache.get('foo:bar')).toBeNull()
-		expect(await cache.get('foo')).toBeNull()
+		const valueAfterDelete = await cache.get('foo:bar')
+		expect(valueAfterDelete).toBeNull()
 	})
 
 	it('Should delete many items from cache', async () => {
 		const cache = new CacheXS()
+
 		await cache.set('foo', 'bar')
 		await cache.set('foo:bar', 'baz')
-		expect(await cache.get('foo')).toBe('bar')
-		expect(await cache.get('foo:bar')).toBe('baz')
+
+		const value = await cache.get('foo')
+		const value2 = await cache.get('foo:bar')
+
+		expect(value).toBe('bar')
+		expect(value2).toBe('baz')
+
 		await cache.deleteMany(['foo', 'foo:bar'])
-		expect(await cache.get('foo')).toBeNull()
-		expect(await cache.get('foo:bar')).toBeNull()
+
+		const valueAfterDelete = await cache.get('foo')
+		const valueAfterDelete2 = await cache.get('foo:bar')
+		expect(valueAfterDelete).toBeNull()
+		expect(valueAfterDelete2).toBeNull()
 	})
 
 	it('Should clear all cache', async () => {
 		const cache = new CacheXS()
+
 		await cache.set('foo', 'bar')
 		await cache.set('foo2', 'bar2')
-		expect(await cache.get('foo')).toBe('bar')
-		expect(await cache.get('foo2')).toBe('bar2')
+
+		const value = await cache.get('foo')
+		const value2 = await cache.get('foo2')
+		expect(value).toBe('bar')
+		expect(value2).toBe('bar2')
+
 		await cache.clear()
-		expect(await cache.get('foo')).toBeNull()
-		expect(await cache.get('foo2')).toBeNull()
+
+		const valueAfterClear = await cache.get('foo')
+		const valueAfterClear2 = await cache.get('foo2')
+
+		expect(valueAfterClear).toBeNull()
+		expect(valueAfterClear2).toBeNull()
 	})
 })
 

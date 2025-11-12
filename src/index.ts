@@ -1,4 +1,4 @@
-import Redis, { RedisOptions } from 'ioredis'
+import { redis, RedisClient, RedisOptions } from 'bun'
 
 import { CacheXSConfig } from './types/CacheXSConfig'
 import { SetOptions } from './types/SetOptions'
@@ -7,17 +7,17 @@ export default class CacheXS {
 	/**
 	 * The Redis connection used by the CacheXS package.
 	 */
-	protected _redisConnection: Redis
+	protected _redisClient = redis
 
 	/**
 	 * The URL of the Redis server.
 	 */
-	protected _redisUrl: string | undefined
+	protected _redisUrl: string | undefined = process.env.REDIS_URL
 
 	/**
 	 * Redis configuration options.
 	 */
-	protected _redisConfig: RedisOptions | undefined
+	protected _redisOptions: RedisOptions | undefined
 
 	/**
 	 * The namespace for the cache.
@@ -50,17 +50,17 @@ export default class CacheXS {
 	 * });
 	 */
 	constructor({
-		redisConnection,
+		redisClient,
 		redisUrl,
-		redisConfig,
+		redisOptions,
 		namespace = 'cacheXS',
 		expiresIn = 300,
 		enableDebug = false,
 	}: CacheXSConfig = {}) {
 		this.configureCacheXS({
-			redisConnection,
+			redisClient,
 			redisUrl,
-			redisConfig,
+			redisOptions,
 			namespace,
 			expiresIn,
 			enableDebug,
@@ -75,7 +75,7 @@ export default class CacheXS {
 	 * // Configure CacheXS with Redis connection options
 	 * const cache = new CacheXS();
 	 * cache.configureCacheXS({
-	 *   redisConnection: redisClient,
+	 *   redisClient: redisClient,
 	 *   namespace: 'cacheXS',
 	 *   expiresIn: 60,
 	 *   enableDebug: true,
@@ -93,7 +93,7 @@ export default class CacheXS {
 	 * // Configure CacheXS with Redis configuration object
 	 * const cache = new CacheXS();
 	 * cache.configureCacheXS({
-	 *   redisConfig: {
+	 *   redisOptions: {
 	 *     host: 'localhost',
 	 *     port: 6379,
 	 *     password: '',
@@ -104,30 +104,19 @@ export default class CacheXS {
 	 * });
 	 */
 	protected configureCacheXS({
-		redisConnection,
-		redisConfig,
+		redisClient,
+		redisOptions,
 		redisUrl,
 		namespace = 'cacheXS',
 		expiresIn = 300,
 		enableDebug = false,
 	}: CacheXSConfig) {
-		if (redisConnection) {
-			this._redisConnection = redisConnection
-			this._redisConfig = redisConnection.options
+		if (redisClient) {
+			this._redisClient = redisClient
+			this._redisOptions = redisOptions
 		} else {
-			if (redisUrl) {
-				this._redisConnection = new Redis(redisUrl)
-				this._redisUrl = redisUrl
-			} else {
-				const config = redisConfig ?? {
-					host: 'localhost',
-					port: 6379,
-					password: '',
-				}
-
-				this._redisConnection = new Redis(config)
-				this._redisConfig = config
-			}
+			this._redisClient = new RedisClient(redisUrl, redisOptions)
+			this._redisUrl = redisUrl
 		}
 
 		this._namespace = namespace
@@ -144,7 +133,7 @@ export default class CacheXS {
 	 * @example
 	 * const cache = new CacheXS();
 	 * cache.configure({
-	 *   redisConfig: {
+	 *   redisOptions: {
 	 * 		host: 'localhost',
 	 *    	port: 6379,
 	 *     	password: ''
@@ -155,14 +144,14 @@ export default class CacheXS {
 	 * });
 	 */
 	public configure({
-		redisConnection,
-		redisConfig,
+		redisClient,
+		redisOptions,
 		redisUrl,
 		namespace = 'cacheXS',
 		expiresIn = 300,
 		enableDebug = false,
 	}: CacheXSConfig): CacheXS {
-		this.configureCacheXS({ redisConnection, redisConfig, redisUrl, namespace, expiresIn, enableDebug })
+		this.configureCacheXS({ redisClient, redisOptions, redisUrl, namespace, expiresIn, enableDebug })
 		return this
 	}
 
@@ -201,7 +190,7 @@ export default class CacheXS {
 	public async get<T>(key: string): Promise<T | null> {
 		const keyWithNamespace = this.concatenateKey(key)
 
-		const value = await this._redisConnection.get(keyWithNamespace)
+		const value = await this._redisClient.get(keyWithNamespace)
 
 		if (this._enableDebug) {
 			console.debug(`CacheXS -> Get -> ${keyWithNamespace}: ${value}`)
@@ -238,9 +227,15 @@ export default class CacheXS {
 	public async set<T>(key: string, value: T, options?: SetOptions): Promise<void> {
 		const expiresIn = options?.expiresIn ?? this._expiresIn
 		const keyWithNamespace = this.concatenateKey(key)
-		const parsedValue = typeof value === 'object' ? JSON.stringify(value) : (value as string | number | Buffer)
+		let parsedValue: unknown
 
-		await this._redisConnection.set(keyWithNamespace, parsedValue, 'EX', expiresIn)
+		if (typeof value === 'object') {
+			parsedValue = JSON.stringify(value)
+		} else {
+			parsedValue = value?.toString() ?? ''
+		}
+
+		await this._redisClient.set(keyWithNamespace, parsedValue, 'EX', expiresIn)
 
 		if (this._enableDebug) {
 			console.debug(`CacheXS -> Set (For: ${expiresIn} Sec.) -> ${keyWithNamespace}: ${value}`)
@@ -263,8 +258,15 @@ export default class CacheXS {
 	 */
 	public async setForever<T>(key: string, value: T): Promise<void> {
 		const keyWithNamespace = this.concatenateKey(key)
+		let parsedValue: unknown
 
-		await this._redisConnection.set(keyWithNamespace, JSON.stringify(value))
+		if (typeof value === 'object' && value !== null) {
+			parsedValue = JSON.stringify(value)
+		} else {
+			parsedValue = value?.toString() ?? ''
+		}
+
+		await this._redisClient.set(keyWithNamespace, parsedValue)
 
 		if (this._enableDebug) {
 			console.debug(`CacheXS -> Set (Forever) -> ${keyWithNamespace}: ${value}`)
@@ -340,6 +342,50 @@ export default class CacheXS {
 	}
 
 	/**
+	 * Increments the value of a key by one.
+	 *
+	 * @param {string} key - The key to increment.
+	 * @returns {Promise<number>} - A Promise that resolves to the new value after incrementing.
+	 *
+	 * @example
+	 * const cache = new CacheXS();
+	 * const value = await cache.increment("myKey");
+	 * console.log(value); // Output: 1 (if the key does not exist in the cache)
+	 */
+	public async increment(key: string): Promise<number> {
+		const keyWithNamespace = this.concatenateKey(key)
+		const value = await this._redisClient.incr(keyWithNamespace)
+
+		if (this._enableDebug) {
+			console.debug(`CacheXS -> Increment -> ${keyWithNamespace}: ${value}`)
+		}
+
+		return value
+	}
+
+	/**
+	 * Decrements the value of a key by one.
+	 *
+	 * @param {string} key - The key to decrement.
+	 * @returns {Promise<number>} - A Promise that resolves to the new value after decrementing.
+	 *
+	 * @example
+	 * const cache = new CacheXS();
+	 * const value = await cache.decrement("myKey");
+	 * console.log(value); // Output: -1 (if the key does not exist in the cache)
+	 */
+	public async decrement(key: string): Promise<number> {
+		const keyWithNamespace = this.concatenateKey(key)
+		const value = await this._redisClient.decr(keyWithNamespace)
+
+		if (this._enableDebug) {
+			console.debug(`CacheXS -> Decrement -> ${keyWithNamespace}: ${value}`)
+		}
+
+		return value
+	}
+
+	/**
 	 * Deletes a cache entry by its key.
 	 *
 	 * @param key The key of the cache entry to delete.
@@ -352,7 +398,7 @@ export default class CacheXS {
 	public async delete(key: string): Promise<void> {
 		const keyWithNamespace = this.concatenateKey(key)
 
-		await this._redisConnection.del(keyWithNamespace)
+		await this._redisClient.del(keyWithNamespace)
 
 		if (this._enableDebug) {
 			console.debug(`CacheXS -> Delete -> ${key}`)
@@ -378,7 +424,7 @@ export default class CacheXS {
 
 		const keysWithNamespace = keys.map((key) => this.concatenateKey(key))
 
-		await this._redisConnection.del(keysWithNamespace)
+		await Promise.all(keysWithNamespace.map((key) => this._redisClient.del(key)))
 
 		if (this._enableDebug) {
 			console.debug(`CacheXS -> Delete Multiple -> ${keys.join(', ')}`)
@@ -393,10 +439,10 @@ export default class CacheXS {
 	 * await cache.clear();
 	 */
 	public async clear(): Promise<void> {
-		const keys = await this._redisConnection.keys(`${this._namespace}:*`)
+		const keys = await this._redisClient.keys(`${this._namespace}:*`)
 
 		if (keys.length > 0) {
-			await this._redisConnection.del(keys)
+			await Promise.all(keys.map((key) => this._redisClient.del(key)))
 		}
 
 		if (this._enableDebug) {
@@ -415,7 +461,7 @@ export default class CacheXS {
 	 */
 	public async has(key: string): Promise<boolean> {
 		const keyWithNamespace = this.concatenateKey(key)
-		const isExists = (await this._redisConnection.exists(keyWithNamespace)) === 1
+		const isExists = await this._redisClient.exists(keyWithNamespace)
 
 		if (this._enableDebug) {
 			console.debug(`CacheXS -> Has -> ${keyWithNamespace}? ${isExists}`)
@@ -437,13 +483,13 @@ export default class CacheXS {
 	 */
 	public async missing(key: string): Promise<boolean> {
 		const keyWithNamespace = this.concatenateKey(key)
-		const isExists = (await this._redisConnection.exists(keyWithNamespace)) === 0
+		const isExists = await this._redisClient.exists(keyWithNamespace)
 
 		if (this._enableDebug) {
 			console.debug(`CacheXS -> Missing -> ${keyWithNamespace}? ${isExists}`)
 		}
 
-		return isExists
+		return !isExists
 	}
 
 	/**
@@ -473,7 +519,7 @@ export default class CacheXS {
 		do {
 			// SCAN returns an array where the first element is the new cursor
 			// and the second element is an array of matched keys
-			const [nextCursor, matchedKeys] = (await this._redisConnection.scan(
+			const [nextCursor, matchedKeys] = (await this._redisClient.scan(
 				cursor,
 				'MATCH',
 				patternWithNamespace,
@@ -514,7 +560,7 @@ export default class CacheXS {
 	 */
 	public async keys(pattern: string): Promise<string[]> {
 		const patternWithNamespace = this.concatenateKey(pattern)
-		const keys = await this._redisConnection.keys(patternWithNamespace)
+		const keys = await this._redisClient.keys(patternWithNamespace)
 
 		// Remove namespace prefix from results
 		const keysWithoutNamespace = keys.map((key) =>
@@ -592,11 +638,11 @@ export default class CacheXS {
 	 * @returns {Redis} The Redis connection.
 	 * @example
 	 * const cache = new CacheXS();
-	 * const redis = cache.redisConnection;
+	 * const redis = cache.redisClient;
 	 * redis.set('key', 'value');
 	 */
-	public get redisConnection(): Redis {
-		return this._redisConnection
+	public get redisClient(): RedisClient {
+		return this._redisClient
 	}
 
 	/**
@@ -621,11 +667,11 @@ export default class CacheXS {
 	 * @example
 	 * // Usage
 	 * const cache = new CacheXS();
-	 * const config = cache.redisConfig;
+	 * const config = cache.redisOptions;
 	 * console.log(config); // { host: 'localhost', port: 6379 }
 	 */
-	public get redisConfig(): RedisOptions | undefined {
-		return this._redisConfig
+	public get redisOptions(): RedisOptions | undefined {
+		return this._redisOptions
 	}
 
 	/**
