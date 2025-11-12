@@ -1,7 +1,6 @@
 import { redis, RedisClient, RedisOptions } from 'bun'
 
 import { CacheXSConfig } from './types/CacheXSConfig'
-import { SetOptions } from './types/SetOptions'
 
 export default class CacheXS {
 	/**
@@ -224,8 +223,7 @@ export default class CacheXS {
 	 * // Set an object value with custom expiration time
 	 * await cache.set('myKey', { name: 'John', age: 30 }, { expiresIn: 360 });
 	 */
-	public async set<T>(key: string, value: T, options?: SetOptions): Promise<void> {
-		const expiresIn = options?.expiresIn ?? this._expiresIn
+	public async set<T>(key: string, value: T, expiresIn: number = this._expiresIn): Promise<void> {
 		const keyWithNamespace = this.concatenateKey(key)
 		let parsedValue: unknown
 
@@ -273,6 +271,16 @@ export default class CacheXS {
 		}
 	}
 
+	public async setIfNotExists<T>(key: string, value: T, expiresIn: number = this._expiresIn): Promise<void> {
+		const keyWithNamespace = this.concatenateKey(key)
+		const exists = await this.exists(keyWithNamespace)
+		if (exists) {
+			return
+		}
+
+		await this.set(key, value, expiresIn)
+	}
+
 	/**
 	 * Retrieves the value associated with the specified key from the cache. If the value does not exist, it sets the value to the provided fallback value and returns it.
 	 * @param key - The key to retrieve or set the value for.
@@ -284,27 +292,26 @@ export default class CacheXS {
 	 * // Get the value associated with the key "username" from the cache. If it does not exist, set it to "guest" and return "guest".
 	 * const username = await cache.getOrSet("username", "guest");
 	 */
-	public async getOrSet<T>(key: string, fallbackValue: T, options?: SetOptions): Promise<T> {
-		const expiresIn = options?.expiresIn ?? this._expiresIn
+	public async getOrSet<T>(key: string, value: T, expiresIn: number = this._expiresIn): Promise<T> {
 		const keyWithNamespace = this.concatenateKey(key)
 
-		const value = await this.get<T>(keyWithNamespace)
+		const existingValue = await this.get<T>(keyWithNamespace)
 
 		if (this._enableDebug) {
-			console.debug(`CacheXS -> Get -> ${keyWithNamespace}: ${value}`)
+			console.debug(`CacheXS -> Get -> ${keyWithNamespace}: ${existingValue}`)
 		}
 
-		if (value) {
-			return value
+		if (existingValue) {
+			return existingValue
 		}
 
-		await this.set(key, fallbackValue, options)
+		await this.set(key, value, expiresIn)
 
 		if (this._enableDebug) {
-			console.debug(`CacheXS -> Set (For: ${expiresIn} Sec.) -> ${keyWithNamespace}: ${value}`)
+			console.debug(`CacheXS -> Set (For: ${expiresIn} Sec.) -> ${keyWithNamespace}: ${existingValue}`)
 		}
 
-		return fallbackValue
+		return value
 	}
 
 	/**
@@ -386,6 +393,61 @@ export default class CacheXS {
 	}
 
 	/**
+	 * Sets the expiration time for a key.
+	 * @param key - The key to set the expiration time for.
+	 * @param expiresIn - The expiration time in seconds.
+	 * @returns A Promise that resolves when the expiration time is set.
+	 * @example
+	 * const cache = new CacheXS();
+	 * await cache.expire("myKey", 60);
+	 */
+
+	public async expire(key: string, expiresIn: number): Promise<void> {
+		const keyWithNamespace = this.concatenateKey(key)
+		await this._redisClient.expire(keyWithNamespace, expiresIn)
+
+		if (this._enableDebug) {
+			console.debug(`CacheXS -> Expire -> ${keyWithNamespace}: ${expiresIn}`)
+		}
+	}
+
+	/**
+	 * Expires a key immediately.
+	 * @param key - The key to expire.
+	 * @returns A Promise that resolves when the key is expired.
+	 * @example
+	 * const cache = new CacheXS();
+	 * await cache.expireNow("myKey");
+	 */
+	public async expireNow(key: string): Promise<void> {
+		const keyWithNamespace = this.concatenateKey(key)
+		await this._redisClient.expire(keyWithNamespace, 0)
+
+		if (this._enableDebug) {
+			console.debug(`CacheXS -> Expire Now -> ${keyWithNamespace}`)
+		}
+	}
+
+	/**
+	 * Gets the time to live for a key.
+	 * @param key - The key to get the time to live for.
+	 * @returns A Promise that resolves to the time to live in seconds.
+	 * @example
+	 * const cache = new CacheXS();
+	 * const ttl = await cache.ttl("myKey");
+	 * console.log(ttl); // Output: 60
+	 */
+	public async ttl(key: string): Promise<number> {
+		const keyWithNamespace = this.concatenateKey(key)
+		const ttl = await this._redisClient.ttl(keyWithNamespace)
+
+		if (this._enableDebug) {
+			console.debug(`CacheXS -> TTL -> ${keyWithNamespace}: ${ttl}`)
+		}
+		return ttl
+	}
+
+	/**
 	 * Deletes a cache entry by its key.
 	 *
 	 * @param key The key of the cache entry to delete.
@@ -456,10 +518,10 @@ export default class CacheXS {
 	 * @returns A promise that resolves to a boolean indicating whether the key exists in the cache.
 	 * @example
 	 * const cache = new CacheXS();
-	 * const exists = await cache.has("myKey");
+	 * const exists = await cache.exists("myKey");
 	 * console.log(exists); // true or false
 	 */
-	public async has(key: string): Promise<boolean> {
+	public async exists(key: string): Promise<boolean> {
 		const keyWithNamespace = this.concatenateKey(key)
 		const isExists = await this._redisClient.exists(keyWithNamespace)
 

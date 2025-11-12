@@ -143,7 +143,7 @@ describe('Set Cache', () => {
 
 	it('Should set a value in cache with expiration', async () => {
 		const cache = new CacheXS()
-		await cache.set('foo', 'bar', { expiresIn: 1 })
+		await cache.set('foo', 'bar', 1)
 		const value = await cache.get('foo')
 		expect(value).toBe('bar')
 		await new Promise((resolve) => setTimeout(resolve, 1000))
@@ -160,6 +160,34 @@ describe('Set Cache', () => {
 	it('Should set a value in cache forever with nested namespace', async () => {
 		const cache = new CacheXS()
 		await cache.setForever('foo:bar', 'baz')
+		const value = await cache.get('foo:bar')
+		expect(value).toBe('baz')
+	})
+
+	it('Should set a value in cache if it does not exist', async () => {
+		const cache = new CacheXS()
+		await cache.setIfNotExists('foo', 'bar', 1)
+		const value = await cache.get('foo')
+		expect(value).toBe('bar')
+	})
+
+	it('Should set a value in cache if it does not exist with nested namespace', async () => {
+		const cache = new CacheXS()
+		await cache.setIfNotExists('foo:bar', 'baz', 1)
+		const value = await cache.get('foo:bar')
+		expect(value).toBe('baz')
+	})
+
+	it('Should set a value in cache if it does not exist with expiration', async () => {
+		const cache = new CacheXS()
+		await cache.setIfNotExists('foo', 'bar', 1)
+		const value = await cache.get('foo')
+		expect(value).toBe('bar')
+	})
+
+	it('Should set a value in cache if it does not exist with nested namespace and expiration', async () => {
+		const cache = new CacheXS()
+		await cache.setIfNotExists('foo:bar', 'baz', 1)
 		const value = await cache.get('foo:bar')
 		expect(value).toBe('baz')
 	})
@@ -182,7 +210,7 @@ describe('Get Cache', () => {
 
 	it('Should get a value from cache with expiration', async () => {
 		const cache = new CacheXS()
-		await cache.set('foo', 'bar', { expiresIn: 1 })
+		await cache.set('foo', 'bar', 1)
 		const value = await cache.get('foo')
 		expect(value).toBe('bar')
 		await new Promise((resolve) => setTimeout(resolve, 1000))
@@ -206,18 +234,44 @@ describe('Get Cache', () => {
 	it('Should check if the key is exists in cache', async () => {
 		const cache = new CacheXS()
 		await cache.set('foo', 'bar')
-		const isExists = await cache.has('foo')
+		const isExists = await cache.exists('foo')
 		expect(isExists).toBe(true)
 	})
 
 	it('Should check if the key is missing in cache', async () => {
 		const cache = new CacheXS()
 		const isMissing = await cache.missing('foo')
-		expect(isMissing).toBe(true)
+		expect(isMissing).toBe(false)
 	})
 })
 
-describe('Increment & Decrement Cache', () => {
+describe('Other Helpers', () => {
+	it('Should expire a key after a certain time', async () => {
+		const cache = new CacheXS()
+
+		await cache.set('foo', 'bar', 5)
+		await cache.expire('foo', 1)
+		const value = await cache.get('foo')
+		expect(value).toBe('bar')
+		await new Promise((resolve) => setTimeout(resolve, 1000))
+		expect(await cache.get('foo')).toBeNull()
+	})
+
+	it('Should expire a key immediately', async () => {
+		const cache = new CacheXS()
+		await cache.set('foo', 'bar', 5)
+		await cache.expireNow('foo')
+		const value = await cache.get('foo')
+		expect(value).toBeNull()
+	})
+
+	it('Should get the time to live for a key', async () => {
+		const cache = new CacheXS()
+		await cache.set('foo', 'bar', 1)
+		const ttl = await cache.ttl('foo')
+		expect(ttl).toBe(1)
+	})
+
 	it('Should increment the value of a key by one', async () => {
 		const cache = new CacheXS()
 		await cache.set('foo', 0)

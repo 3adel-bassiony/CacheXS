@@ -93,6 +93,10 @@ The CacheXS package comes with a comprehensive set of features designed to make 
 -   ### Features Overview
 
     -   **Simple Cache Management**: Easily cache the data in Redis with simple functions.
+    -   **Expiration Control**: Set, update, and check expiration times for cached entries.
+    -   **Pattern Matching**: Find, retrieve, and delete cache entries using powerful pattern matching with `scan` and `keys` methods.
+    -   **Conditional Caching**: Use `setIfNotExists`, `getOrSet`, and `getOrSetForever` for intelligent cache operations.
+    -   **Bulk Operations**: Efficiently work with multiple cache entries at once with pattern-based operations.
 
 -   ### Usage & Configuration
 
@@ -139,7 +143,7 @@ The CacheXS package comes with a comprehensive set of features designed to make 
         ```typescript
         await cacheXS.set('myKey', 'myValue')
         await cacheXS.set('myKey', 123)
-        await cacheXS.set('myKey', { name: 'John', age: 30 }, { expiresIn: 360 })
+        await cacheXS.set('myKey', { name: 'John', age: 30 }, 360) // expires in 360 seconds
         ```
 
     -   `setForever` Sets a value in the cache forever
@@ -148,10 +152,16 @@ The CacheXS package comes with a comprehensive set of features designed to make 
         await cacheXS.setForever('user', { name: 'John Doe', age: 30 })
         ```
 
+    -   `setIfNotExists` Sets a value in the cache only if the key does not already exist.
+
+        ```typescript
+        await cacheXS.setIfNotExists('myKey', 'myValue', 360) // expires in 360 seconds
+        ```
+
     -   `getOrSet` Retrieves the value associated with the specified key from the cache. If the value does not exist, it sets the value to the provided fallback value and returns it.
 
         ```typescript
-        const username = await cacheXS.getOrSet('myKey', 'myValue')
+        const username = await cacheXS.getOrSet('myKey', 'myValue', 360) // expires in 360 seconds
         ```
 
     -   `getOrSetForever` Retrieves the value associated with the specified key from the cache. If the value does not exist, it sets the specified fallback value in the cache and returns it.
@@ -174,6 +184,24 @@ The CacheXS package comes with a comprehensive set of features designed to make 
         const nextValue = await cacheXS.decrement('count') // -> -2
         ```
 
+    -   `expire` Sets the expiration time for a key.
+
+        ```typescript
+        await cacheXS.expire('myKey', 60) // expires in 60 seconds
+        ```
+
+    -   `expireNow` Expires a key immediately.
+
+        ```typescript
+        await cacheXS.expireNow('myKey')
+        ```
+
+    -   `ttl` Gets the time to live for a key in seconds.
+
+        ```typescript
+        const ttl = await cacheXS.ttl('myKey') // -> 60
+        ```
+
     -   `delete` Deletes a cache entry by its key.
 
         ```typescript
@@ -192,16 +220,49 @@ The CacheXS package comes with a comprehensive set of features designed to make 
         await cacheXS.clear()
         ```
 
-    -   `has` Checks if a key exists in the cache.
+    -   `exists` Checks if a key exists in the cache.
 
         ```typescript
-        await cacheXS.has('myKey') // -> True || False
+        await cacheXS.exists('myKey') // -> true || false
         ```
 
     -   `missing` Checks if a key is missing in the cache.
 
         ```typescript
-        await cacheXS.missing('myKey') // -> True || False
+        await cacheXS.missing('myKey') // -> true || false
+        ```
+
+    -   `scan` Finds keys matching a pattern using the SCAN command (non-blocking, recommended for production).
+
+        ```typescript
+        const userKeys = await cacheXS.scan('user:*') // -> ['user:123', 'user:456']
+        const sessionKeys = await cacheXS.scan('session:*', 50) // with custom count
+        ```
+
+    -   `keys` Finds keys matching a pattern using the KEYS command (blocking, use with caution in production).
+
+        ```typescript
+        const userKeys = await cacheXS.keys('user:*') // -> ['user:123', 'user:456']
+        ```
+
+    -   `getByPattern` Retrieves multiple values by pattern matching.
+
+        ```typescript
+        const userData = await cacheXS.getByPattern<User>('user:*')
+        // -> { 'user:123': {...}, 'user:456': {...} }
+        
+        // Use KEYS command instead of SCAN
+        const configData = await cacheXS.getByPattern('config:*', false)
+        ```
+
+    -   `deleteByPattern` Deletes keys matching a pattern.
+
+        ```typescript
+        const deletedCount = await cacheXS.deleteByPattern('session:*:expired')
+        console.log(`Deleted ${deletedCount} expired sessions`)
+        
+        // Use KEYS command instead of SCAN
+        const count = await cacheXS.deleteByPattern('temp:*', false)
         ```
 
     -   `concatenateKey` Concatenates the given key with the namespace and returns the resulting string.
