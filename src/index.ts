@@ -106,7 +106,7 @@ export default class CacheXS {
 		redisClient,
 		redisOptions,
 		redisUrl,
-		namespace = 'cacheXS',
+		namespace = '',
 		expiresIn = 300,
 		enableDebug = false,
 	}: CacheXSConfig) {
@@ -146,7 +146,7 @@ export default class CacheXS {
 		redisClient,
 		redisOptions,
 		redisUrl,
-		namespace = 'cacheXS',
+		namespace = '',
 		expiresIn = 300,
 		enableDebug = false,
 	}: CacheXSConfig): CacheXS {
