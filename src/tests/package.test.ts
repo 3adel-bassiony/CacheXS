@@ -1,11 +1,21 @@
 import { RedisClient } from 'bun'
-import { describe, expect, it } from 'bun:test'
+import { afterAll, beforeAll, describe, expect, it } from 'bun:test'
 
 import CacheXS from '../index'
 
 const redisUrl = 'redis://localhost:6379'
 
 describe('Create Cache Instance', () => {
+	beforeAll(async () => {
+		const cache = new CacheXS()
+		await cache.clear()
+	})
+
+	afterAll(async () => {
+		const cache = new CacheXS()
+		await cache.clear()
+	})
+
 	it('Should create a new instance for Cache class with default configuration', async () => {
 		const cache = new CacheXS()
 
@@ -166,30 +176,27 @@ describe('Set Cache', () => {
 
 	it('Should set a value in cache if it does not exist', async () => {
 		const cache = new CacheXS()
-		await cache.setIfNotExists('foo', 'bar', 1)
-		const value = await cache.get('foo')
+		await cache.setIfNotExists('foo', 'bar')
+		const value = await cache.get<string>('foo')
 		expect(value).toBe('bar')
 	})
 
 	it('Should set a value in cache if it does not exist with nested namespace', async () => {
 		const cache = new CacheXS()
-		await cache.setIfNotExists('foo:bar', 'baz', 1)
-		const value = await cache.get('foo:bar')
+
+		const result = await cache.setIfNotExists('foo:foo:bar', 'baz')
+		expect(result).toBe('OK')
+		const value = await cache.get<string>('foo:foo:bar')
 		expect(value).toBe('baz')
 	})
 
-	it('Should set a value in cache if it does not exist with expiration', async () => {
+	it('Should not set a value in cache if already exists', async () => {
 		const cache = new CacheXS()
-		await cache.setIfNotExists('foo', 'bar', 1)
-		const value = await cache.get('foo')
+		await cache.set('foo', 'bar')
+		const result = await cache.setIfNotExists('foo', 'zoo')
+		expect(result).toBe('EXIST')
+		const value = await cache.get<string>('foo')
 		expect(value).toBe('bar')
-	})
-
-	it('Should set a value in cache if it does not exist with nested namespace and expiration', async () => {
-		const cache = new CacheXS()
-		await cache.setIfNotExists('foo:bar', 'baz', 1)
-		const value = await cache.get('foo:bar')
-		expect(value).toBe('baz')
 	})
 })
 

@@ -170,7 +170,15 @@ export default class CacheXS {
 	 */
 	public concatenateKey(key: string): string {
 		const namespace = this._namespace
-		return namespace.length > 0 ? `${namespace}:${key}` : key
+		if (namespace.length === 0) {
+			return key
+		}
+		// Check if the key already starts with the namespace
+		const namespacePrefix = `${namespace}:`
+		if (key.startsWith(namespacePrefix)) {
+			return key
+		}
+		return `${namespacePrefix}${key}`
 	}
 
 	/**
@@ -223,7 +231,7 @@ export default class CacheXS {
 	 * // Set an object value with custom expiration time
 	 * await cache.set('myKey', { name: 'John', age: 30 }, { expiresIn: 360 });
 	 */
-	public async set<T>(key: string, value: T, expiresIn: number = this._expiresIn): Promise<void> {
+	public async set<T>(key: string, value: T, expiresIn: number = this._expiresIn): Promise<'OK' | null> {
 		const keyWithNamespace = this.concatenateKey(key)
 		let parsedValue: unknown
 
@@ -233,11 +241,13 @@ export default class CacheXS {
 			parsedValue = value?.toString() ?? ''
 		}
 
-		await this._redisClient.set(keyWithNamespace, parsedValue, 'EX', expiresIn)
+		const result = await this._redisClient.set(keyWithNamespace, parsedValue, 'EX', expiresIn)
 
 		if (this._enableDebug) {
 			console.debug(`CacheXS -> Set (For: ${expiresIn} Sec.) -> ${keyWithNamespace}: ${value}`)
 		}
+
+		return result
 	}
 
 	/**
@@ -271,14 +281,16 @@ export default class CacheXS {
 		}
 	}
 
-	public async setIfNotExists<T>(key: string, value: T, expiresIn: number = this._expiresIn): Promise<void> {
+	public async setIfNotExists<T>(key: string, value: T, expiresIn: number = this._expiresIn) {
 		const keyWithNamespace = this.concatenateKey(key)
 		const exists = await this.exists(keyWithNamespace)
+
 		if (exists) {
-			return
+			return 'EXIST'
 		}
 
-		await this.set(key, value, expiresIn)
+		const result = await this.set(key, value, expiresIn)
+		return result
 	}
 
 	/**
