@@ -20,7 +20,7 @@ describe('Create Cache Instance', () => {
 		const cache = new CacheXS()
 
 		expect(cache).toBeInstanceOf(CacheXS)
-		expect(cache.namespace).toStrictEqual('cacheXS')
+		expect(cache.namespace).toStrictEqual('')
 		expect(cache.expiresIn).toStrictEqual(300)
 		expect(cache.isDebugEnabled).toStrictEqual(false)
 	})
@@ -33,7 +33,7 @@ describe('Create Cache Instance', () => {
 		})
 
 		expect(cache).toBeInstanceOf(CacheXS)
-		expect(cache.namespace).toStrictEqual('cacheXS')
+		expect(cache.namespace).toStrictEqual('')
 		expect(cache.expiresIn).toStrictEqual(300)
 		expect(cache.isDebugEnabled).toStrictEqual(false)
 	})
@@ -80,12 +80,12 @@ describe('Create Cache Instance', () => {
 		// expect(cache.redisConfig).toMatchObject(redisConfig)
 		expect(cache.redisUrl).toBeUndefined()
 		expect(cache.expiresIn).toBe(300)
-		expect(cache.namespace).toBe('cacheXS')
+		expect(cache.namespace).toBe('')
 		expect(cache.isDebugEnabled).toBe(false)
 	})
 
 	it('Should test the concatenateKey method', async () => {
-		const cache = new CacheXS()
+		const cache = new CacheXS({ namespace: 'cacheXS' })
 		expect(cache.concatenateKey('foo')).toBe('cacheXS:foo')
 		expect(cache.concatenateKey('foo:bar')).toBe('cacheXS:foo:bar')
 	})
@@ -182,7 +182,7 @@ describe('Set Cache', () => {
 	})
 
 	it('Should set a value in cache if it does not exist with nested namespace', async () => {
-		const cache = new CacheXS()
+		const cache = new CacheXS({ namespace: 'test' })
 
 		const result = await cache.setIfNotExists('foo:foo:bar', 'baz')
 		expect(result).toBe('OK')
@@ -292,6 +292,115 @@ describe('Other Helpers', () => {
 		const value = await cache.decrement('foo')
 		expect(value).toBe(0)
 	})
+
+	it('Should increment a new key with expiry', async () => {
+		const cache = new CacheXS()
+		const value = await cache.incrementWithExpiry('counter', 2)
+		expect(value).toBe(1)
+
+		// Verify the key exists
+		const exists = await cache.exists('counter')
+		expect(exists).toBe(true)
+
+		// Verify it expires after 2 seconds
+		await new Promise((resolve) => setTimeout(resolve, 2100))
+		const expiredValue = await cache.get('counter')
+		expect(expiredValue).toBeNull()
+	})
+
+	it('Should increment existing key with expiry only on first increment', async () => {
+		const cache = new CacheXS()
+
+		// First increment - should set expiry
+		const firstValue = await cache.incrementWithExpiry('counter', 5)
+		expect(firstValue).toBe(1)
+
+		// Get initial TTL
+		const initialTtl = await cache.ttl('counter')
+		expect(initialTtl).toBeGreaterThan(0)
+		expect(initialTtl).toBeLessThanOrEqual(5)
+
+		// Second increment - should NOT reset expiry
+		const secondValue = await cache.incrementWithExpiry('counter', 10)
+		expect(secondValue).toBe(2)
+
+		// TTL should still be from the first increment, not 10
+		const newTtl = await cache.ttl('counter')
+		expect(newTtl).toBeLessThanOrEqual(initialTtl)
+
+		// Third increment
+		const thirdValue = await cache.incrementWithExpiry('counter', 10)
+		expect(thirdValue).toBe(3)
+	})
+
+	it('Should handle multiple increments with expiry correctly', async () => {
+		const cache = new CacheXS()
+
+		const value1 = await cache.incrementWithExpiry('hits', 3)
+		const value2 = await cache.incrementWithExpiry('hits', 3)
+		const value3 = await cache.incrementWithExpiry('hits', 3)
+
+		expect(value1).toBe(1)
+		expect(value2).toBe(2)
+		expect(value3).toBe(3)
+
+		// Should expire after 3 seconds
+		await new Promise((resolve) => setTimeout(resolve, 3100))
+		const expiredValue = await cache.get('hits')
+		expect(expiredValue).toBeNull()
+	})
+
+	it('Should work with namespace in incrementWithExpiry', async () => {
+		const cache = new CacheXS({ namespace: 'test' })
+
+		const value = await cache.incrementWithExpiry('views:page1', 2)
+		expect(value).toBe(1)
+
+		// Verify the key exists with namespace
+		const exists = await cache.exists('views:page1')
+		expect(exists).toBe(true)
+
+		// Verify it has TTL set
+		const ttl = await cache.ttl('views:page1')
+		expect(ttl).toBeGreaterThan(0)
+		expect(ttl).toBeLessThanOrEqual(2)
+	})
+
+	it('Should reset counter after expiry with incrementWithExpiry', async () => {
+		const cache = new CacheXS()
+
+		// First increment
+		const value1 = await cache.incrementWithExpiry('temp', 1)
+		expect(value1).toBe(1)
+
+		// Wait for expiry
+		await new Promise((resolve) => setTimeout(resolve, 1100))
+
+		// Should start from 1 again after expiry
+		const value2 = await cache.incrementWithExpiry('temp', 2)
+		expect(value2).toBe(1)
+
+		// Verify new TTL is set
+		const ttl = await cache.ttl('temp')
+		expect(ttl).toBeGreaterThan(0)
+		expect(ttl).toBeLessThanOrEqual(2)
+	})
+
+	it('Should handle incrementWithExpiry with different keys', async () => {
+		const cache = new CacheXS()
+
+		const counter1 = await cache.incrementWithExpiry('counter1', 5)
+		const counter2 = await cache.incrementWithExpiry('counter2', 5)
+		const counter1Again = await cache.incrementWithExpiry('counter1', 5)
+
+		expect(counter1).toBe(1)
+		expect(counter2).toBe(1)
+		expect(counter1Again).toBe(2)
+
+		// Both should exist
+		expect(await cache.exists('counter1')).toBe(true)
+		expect(await cache.exists('counter2')).toBe(true)
+	})
 })
 
 describe('Delete & Clear Cache', () => {
@@ -341,7 +450,7 @@ describe('Delete & Clear Cache', () => {
 	})
 
 	it('Should clear all cache', async () => {
-		const cache = new CacheXS()
+		const cache = new CacheXS({ namespace: 'clear' })
 
 		await cache.set('foo', 'bar')
 		await cache.set('foo2', 'bar2')
@@ -613,7 +722,7 @@ describe('Pattern-Based Key Operations', () => {
 
 	describe('Pattern methods edge cases', () => {
 		it('Should handle special Redis pattern characters', async () => {
-			const cache = new CacheXS()
+			const cache = new CacheXS({ namespace: 'test' })
 			await cache.clear()
 			await cache.set('test-bracket', 'bracket value')
 			await cache.set('test*star', 'star value')

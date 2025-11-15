@@ -460,6 +460,31 @@ export default class CacheXS {
 	}
 
 	/**
+	 * Increments the value of a key by one and sets the expiration time for the key.
+	 * @param key - The key to increment.
+	 * @param expiresIn - The expiration time in seconds.
+	 * @returns A Promise that resolves to the new value after incrementing.
+	 * @example
+	 * const cache = new CacheXS();
+	 * const value = await cache.incrementWithExpiry("myKey", 60);
+	 */
+	public async incrementWithExpiry(key: string, expiresIn: number): Promise<number> {
+		const keyWithNamespace = this.concatenateKey(key)
+
+		const value = await this.increment(key)
+
+		if (value === 1) {
+			await this.expire(key, expiresIn)
+		}
+
+		if (this._enableDebug) {
+			console.debug(`CacheXS -> Increment With Expiry -> ${keyWithNamespace}: ${value}`)
+		}
+
+		return value
+	}
+
+	/**
 	 * Deletes a cache entry by its key.
 	 *
 	 * @param key The key of the cache entry to delete.
