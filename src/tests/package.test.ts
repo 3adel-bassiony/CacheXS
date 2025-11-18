@@ -773,3 +773,51 @@ describe('Pattern-Based Key Operations', () => {
 		})
 	})
 })
+
+describe('Connection Operations', () => {
+	it('Should ping Redis server without message', async () => {
+		const cache = new CacheXS()
+		const result = await cache.ping()
+		expect(result).toBe('PONG')
+	})
+
+	it('Should ping Redis server with custom message', async () => {
+		const cache = new CacheXS()
+		const message = 'Hello Redis'
+		const result = await cache.ping(message)
+		expect(result).toBe(message)
+	})
+
+	it('Should check if Redis connection is established', async () => {
+		const cache = new CacheXS()
+		const isConnected = await cache.isConnected()
+		expect(isConnected).toBe(true)
+	})
+
+	it('Should verify connection status with redis URL', async () => {
+		const cache = new CacheXS({ redisUrl })
+		const isConnected = await cache.isConnected()
+		expect(isConnected).toBe(true)
+	})
+
+	it('Should verify connection status with namespace', async () => {
+		const cache = new CacheXS({ namespace: 'connection-test' })
+		const isConnected = await cache.isConnected()
+		expect(isConnected).toBe(true)
+	})
+
+	it('Should ping multiple times successfully', async () => {
+		const cache = new CacheXS()
+		const results = await Promise.all([cache.ping(), cache.ping(), cache.ping()])
+
+		results.forEach((result) => {
+			expect(result).toBe('PONG')
+		})
+	})
+
+	it('Should handle ping with empty string message', async () => {
+		const cache = new CacheXS()
+		const result = await cache.ping('')
+		expect(result).toBe('')
+	})
+})

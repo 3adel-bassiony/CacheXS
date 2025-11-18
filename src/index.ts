@@ -732,6 +732,46 @@ export default class CacheXS {
 	}
 
 	/**
+	 * Pings the Redis server.
+	 *
+	 * @returns A promise that resolves to the result of the ping command.
+	 *
+	 * @example
+	 * const cache = new CacheXS();
+	 * const result = await cache.ping();
+	 * console.log(result); // "PONG"
+	 */
+	public async ping(message?: string): Promise<string> {
+		const result = await this._redisClient.ping(message)
+
+		if (this._enableDebug) {
+			console.debug(`CacheXS -> Ping -> Message: ${message}, Result: ${result}`)
+		}
+
+		return result
+	}
+
+	/**
+	 * Checks if the Redis connection is established.
+	 *
+	 * @returns A promise that resolves to a boolean indicating whether the Redis connection is established or not.
+	 *
+	 * @example
+	 * const cache = new CacheXS();
+	 * const isConnected = await cache.isConnected();
+	 * console.log(isConnected); // true or false
+	 */
+	public async isConnected(): Promise<boolean> {
+		const result = await this._redisClient.ping()
+
+		if (this._enableDebug) {
+			console.debug(`CacheXS -> Is Connected -> Result: ${result}`)
+		}
+
+		return result === 'PONG'
+	}
+
+	/**
 	 * Gets the Redis connection.
 	 *
 	 * @returns {Redis} The Redis connection.
