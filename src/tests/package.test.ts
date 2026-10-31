@@ -9,11 +9,20 @@ let redisUrl: string
 let redisServer: Awaited<ReturnType<typeof startRedisServer>>
 let testRedis: RedisClient
 const caches = new Set<CacheXS>()
+const externalClients = new Set<RedisClient>()
 
 function createCache(config: CacheXSConfig = {}): CacheXS {
 	const cache = new CacheXS({ redisUrl, ...config })
 	caches.add(cache)
 	return cache
+}
+
+async function waitForReplacement(cache: CacheXS, previousClient: RedisClient): Promise<void> {
+	const deadline = Date.now() + 2000
+	while (cache.redisClient === previousClient && Date.now() < deadline) {
+		await Bun.sleep(10)
+	}
+	expect(cache.redisClient).not.toBe(previousClient)
 }
 
 beforeAll(async () => {
@@ -28,11 +37,10 @@ beforeEach(async () => {
 
 afterEach(() => {
 	mock.restore()
-	for (const cache of caches) {
-		cache.redisClient.onclose = null
-		cache.redisClient.close()
-	}
+	for (const cache of caches) cache.close()
 	caches.clear()
+	for (const client of externalClients) client.close()
+	externalClients.clear()
 })
 
 afterAll(async () => {
@@ -58,7 +66,7 @@ describe('Create Cache Instance', () => {
 				`import CacheXS from ${JSON.stringify(moduleUrl)};
 const cache = new CacheXS();
 try { process.stdout.write(await cache.ping()) }
-finally { cache.redisClient.close() }`,
+finally { cache.close() }`,
 			],
 			{ env: { ...process.env, REDIS_URL: redisUrl, VALKEY_URL: redisUrl }, stdout: 'pipe', stderr: 'pipe' }
 		)
@@ -75,6 +83,7 @@ finally { cache.redisClient.close() }`,
 
 	it('Should create a new instance for Cache class with redis connection', async () => {
 		const bunRedis = new RedisClient(redisUrl)
+		externalClients.add(bunRedis)
 
 		const cache = createCache({
 			redisClient: bunRedis,
@@ -1038,6 +1047,16 @@ describe('Configuration and Connection Lifecycle', () => {
 		expect(cache.redisOptions).toEqual(redisOptions)
 	})
 
+	it('Should preserve an owned client event handler when recovery is disabled', () => {
+		const cache = createCache()
+		const onclose = mock()
+		cache.redisClient.onclose = onclose
+
+		cache.configure({ namespace: 'updated' })
+
+		expect(cache.redisClient.onclose).toBe(onclose)
+	})
+
 	it('Should preserve the connection and existing settings during partial configuration', async () => {
 		const redisOptions = { connectionTimeout: 2000 }
 		const cache = createCache({ redisUrl, redisOptions, namespace: 'old', expiresIn: 60 })
@@ -1108,6 +1127,7 @@ describe('Configuration and Connection Lifecycle', () => {
 	it('Should clear old connection metadata when injecting a different client', () => {
 		const cache = createCache({ redisUrl, redisOptions: { connectionTimeout: 2000 } })
 		const external = new RedisClient(redisUrl)
+		externalClients.add(external)
 		cache.configure({ redisClient: external })
 
 		expect(cache.redisClient).toBe(external)
@@ -1127,6 +1147,141 @@ describe('Configuration and Connection Lifecycle', () => {
 		expect(cache.redisClient).toBe(client)
 		expect(cache.namespace).toBe('original')
 		expect(cache.expiresIn).toBe(60)
+	})
+
+	it('Should close an owned client once and keep the cache closed', async () => {
+		const cache = createCache({ recoverOnDisconnect: true, redisOptions: { autoReconnect: false, maxRetries: 0 } })
+		await cache.setForever('key', 'value')
+		const client = cache.redisClient
+		const close = spyOn(client, 'close')
+
+		cache.close()
+		cache.close()
+
+		expect(close).toHaveBeenCalledTimes(1)
+		expect(client.onclose).toBeNull()
+		await expect(client.ping()).rejects.toThrow()
+		await expect(cache.get('key')).rejects.toThrow('CacheXS is closed')
+		await expect(cache.setForever('key', 'changed')).rejects.toThrow('CacheXS is closed')
+		expect(await cache.isConnected()).toBe(false)
+		expect(() => cache.configure({ redisUrl })).toThrow('CacheXS is closed')
+	})
+
+	it('Should close before the first command without opening a connection', async () => {
+		const cache = createCache({ recoverOnDisconnect: true })
+		const client = cache.redisClient
+
+		cache.close()
+
+		expect(client.connected).toBe(false)
+		await expect(cache.ping()).rejects.toThrow('CacheXS is closed')
+	})
+
+	it('Should leave injected clients and their event handlers under caller control', async () => {
+		const client = new RedisClient(redisUrl, { autoReconnect: false, maxRetries: 0 })
+		externalClients.add(client)
+		const onclose = mock()
+		client.onclose = onclose
+		const cache = createCache({ redisClient: client, recoverOnDisconnect: true })
+		await cache.setForever('shared', 'value')
+
+		cache.close()
+		cache.close()
+
+		expect(client.onclose).toBe(onclose)
+		expect(onclose).not.toHaveBeenCalled()
+		expect(await client.get('shared')).toBe('"value"')
+		await expect(cache.get('shared')).rejects.toThrow('CacheXS is closed')
+	})
+
+	it('Should recover after Redis rejects the initial connection without duplicating clients', async () => {
+		const cache = createCache({ recoverOnDisconnect: true, redisOptions: { autoReconnect: false, maxRetries: 0 } })
+		const initialClient = cache.redisClient
+		await testRedis.send('CONFIG', ['SET', 'maxclients', '1'])
+		try {
+			await expect(cache.ping()).rejects.toThrow()
+			await waitForReplacement(cache, initialClient)
+		} finally {
+			await testRedis.send('CONFIG', ['SET', 'maxclients', '10000'])
+		}
+		const recoveredClient = cache.redisClient
+
+		expect(await Promise.all(Array.from({ length: 20 }, () => cache.ping()))).toEqual(
+			Array.from({ length: 20 }, () => 'PONG')
+		)
+		expect(cache.redisClient).toBe(recoveredClient)
+		const clients = await testRedis.send('CLIENT', ['LIST']) as string
+		expect(clients.trim().split('\n')).toHaveLength(2)
+	})
+
+	it('Should preserve the latest cache settings after a connected client is disconnected', async () => {
+		const cache = createCache({
+			recoverOnDisconnect: true,
+			redisOptions: { autoReconnect: false, maxRetries: 0 },
+			namespace: 'original',
+			expiresIn: 300,
+		})
+		cache.configure({ namespace: 'updated', expiresIn: 60 })
+		await cache.set('existing', 'value')
+		const client = cache.redisClient
+		const id = String(await client.send('CLIENT', ['ID']))
+
+		await testRedis.send('CLIENT', ['KILL', 'ID', id])
+		await waitForReplacement(cache, client)
+
+		expect(await cache.get<string>('existing')).toBe('value')
+		expect(cache.namespace).toBe('updated')
+		expect(cache.expiresIn).toBe(60)
+		await cache.set('next', 'recovered')
+		expect(await testRedis.get('updated:next')).toBe('"recovered"')
+		expect(await cache.ttl('next')).toBeGreaterThan(0)
+		expect(await cache.ttl('next')).toBeLessThanOrEqual(60)
+	})
+
+	it('Should recover using the latest Redis URL and options', async () => {
+		const secondServer = await startRedisServer()
+		try {
+			const cache = createCache({ recoverOnDisconnect: true })
+			await cache.ping()
+			const nextUrl = `${secondServer.url}/4`
+			const redisOptions = { autoReconnect: false, maxRetries: 0, connectionTimeout: 1000 }
+			cache.configure({ redisUrl: nextUrl, redisOptions })
+			await cache.setForever('key', 'second server')
+			const client = cache.redisClient
+			const id = String(await client.send('CLIENT', ['ID']))
+
+			await secondServer.client.send('CLIENT', ['KILL', 'ID', id])
+			await waitForReplacement(cache, client)
+
+			expect(cache.redisUrl).toBe(nextUrl)
+			expect(cache.redisOptions).toEqual(redisOptions)
+			expect(await cache.get<string>('key')).toBe('second server')
+			await cache.setForever('next', 'latest database')
+			await secondServer.client.send('SELECT', ['4'])
+			expect(await secondServer.client.get('next')).toBe('"latest database"')
+			expect(await testRedis.get('next')).toBeNull()
+			cache.close()
+		} finally {
+			await secondServer.stop()
+		}
+	})
+
+	it('Should enable and disable recovery through partial configuration', async () => {
+		const cache = createCache({ redisOptions: { autoReconnect: false, maxRetries: 0 } })
+		await cache.ping()
+		cache.configure({ recoverOnDisconnect: true })
+		const client = cache.redisClient
+		const id = String(await client.send('CLIENT', ['ID']))
+		await testRedis.send('CLIENT', ['KILL', 'ID', id])
+		await waitForReplacement(cache, client)
+		expect(await cache.ping()).toBe('PONG')
+
+		cache.configure({ recoverOnDisconnect: false })
+		const finalClient = cache.redisClient
+		expect(finalClient.onclose).toBeNull()
+		finalClient.close()
+		await expect(cache.ping()).rejects.toThrow()
+		expect(cache.redisClient).toBe(finalClient)
 	})
 })
 

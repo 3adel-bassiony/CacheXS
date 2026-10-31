@@ -68,6 +68,6 @@ try {
 	}
 	process.stdout.write(`${JSON.stringify({ bun: Bun.version, keyCount, samples, results }, null, 2)}\n`)
 } finally {
-	cache.redisClient.close()
+	cache.close()
 	await server.stop()
 }

@@ -86,6 +86,44 @@ And then you can use it like this:
 const cachedData = await cacheXS.get('foo') // -> cached value, or null if missing
 ```
 
+## Connection recovery and shutdown
+
+CacheXS can replace its owned Redis client after disconnection, leaving the next
+operation to establish a connection. Enable this when commands should fail promptly
+during an outage and later requests should recover without restarting the process:
+
+```typescript
+import CacheXS, { type CacheXSConfig } from 'cachexs'
+
+const config: CacheXSConfig = {
+	redisUrl: process.env.REDIS_URL,
+	recoverOnDisconnect: true,
+	redisOptions: {
+		connectionTimeout: 2000,
+		autoReconnect: false,
+		maxRetries: 0,
+	},
+}
+
+const cache = new CacheXS(config)
+await cache.ping()
+
+// After draining requests and jobs during shutdown:
+cache.close()
+```
+
+`recoverOnDisconnect` defaults to `false`, preserving Bun's configured reconnect
+behavior. Recovery does not replay failed commands or start a background retry loop;
+later commands use the replacement client and the latest `configure()` settings.
+Read `cache.redisClient` when issuing raw commands rather than retaining it across
+operations, because recovery can replace it. With recovery enabled, CacheXS manages
+the owned client's `onclose` handler.
+
+`close()` is synchronous, idempotent, and terminal: further cache commands and
+`configure()` calls fail. It closes only clients created by CacheXS. If you supply
+`redisClient`, its connection and event handlers remain caller-owned, including
+reconnection and shutdown. Create a new CacheXS instance after closing one.
+
 &nbsp;
 
 # Documentation
