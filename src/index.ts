@@ -53,6 +53,16 @@ return value
 	private _ownsRedisClient = false
 
 	/**
+	 * Whether to replace an owned client after disconnection for the next operation.
+	 */
+	private _recoverOnDisconnect = false
+
+	/**
+	 * Whether this cache instance has been explicitly closed.
+	 */
+	private _closed = false
+
+	/**
 	 * The URL of the Redis server.
 	 */
 	protected _redisUrl: string | undefined
@@ -96,6 +106,7 @@ return value
 		redisClient,
 		redisUrl,
 		redisOptions,
+		recoverOnDisconnect = false,
 		namespace = '',
 		expiresIn = 300,
 		enableDebug = false,
@@ -104,6 +115,7 @@ return value
 			redisClient,
 			redisUrl,
 			redisOptions,
+			recoverOnDisconnect,
 			namespace,
 			expiresIn,
 			enableDebug,
@@ -145,18 +157,21 @@ return value
 	 *   enableDebug: true,
 	 * });
 	 */
-	protected configureCacheXS(options: CacheXSConfig) {
+	protected configureCacheXS(options: CacheXSConfig, replaceClient = false) {
+		if (this._closed) throw new Error('CacheXS is closed')
+
 		const {
 			redisClient,
 			redisOptions,
 			redisUrl,
+			recoverOnDisconnect = this._recoverOnDisconnect,
 			namespace = this._namespace ?? '',
 			expiresIn = this._expiresIn ?? 300,
 			enableDebug = this._enableDebug ?? false,
 		} = options
 		this.validateExpiry(expiresIn)
 
-		if (redisClient || !this._redisClient || redisUrl !== undefined || redisOptions !== undefined) {
+		if (replaceClient || redisClient || !this._redisClient || redisUrl !== undefined || redisOptions !== undefined) {
 			const previousClient = this._redisClient
 			const previousOwned = this._ownsRedisClient
 			const replacingWithExternalClient = redisClient && redisClient !== previousClient
@@ -179,6 +194,19 @@ return value
 		this._namespace = namespace
 		this._expiresIn = expiresIn
 		this._enableDebug = enableDebug
+		const wasRecovering = this._recoverOnDisconnect
+		this._recoverOnDisconnect = recoverOnDisconnect
+
+		if (this._ownsRedisClient && (recoverOnDisconnect || wasRecovering)) {
+			const client = this._redisClient
+			client.onclose = recoverOnDisconnect
+				? () => {
+					if (this._closed || this._redisClient !== client) return
+
+					this.configureCacheXS({}, true)
+				}
+				: null
+		}
 	}
 
 	/**
@@ -202,6 +230,24 @@ return value
 	public configure(options: CacheXSConfig): CacheXS {
 		this.configureCacheXS(options)
 		return this
+	}
+
+	/**
+	 * Permanently closes this cache instance and disables client recovery.
+	 * Only Redis clients created by CacheXS are closed; injected clients remain caller-owned.
+	 * Repeated calls are safe. Create a new CacheXS instance to use the cache again.
+	 *
+	 * @example
+	 * cache.close();
+	 */
+	public close(): void {
+		if (this._closed) return
+
+		this._closed = true
+		if (!this._ownsRedisClient) return
+
+		this._redisClient.onclose = null
+		this._redisClient.close()
 	}
 
 	/**
@@ -314,7 +360,7 @@ return value
 		const namespacedPattern = this.concatenatePattern(pattern)
 		let cursor = '0'
 		do {
-			const [nextCursor, keys] = await this._redisClient.scan(cursor, 'MATCH', namespacedPattern, 'COUNT', count)
+			const [nextCursor, keys] = await this.redisClient.scan(cursor, 'MATCH', namespacedPattern, 'COUNT', count)
 			cursor = nextCursor
 			if (keys.length > 0) await operation(keys)
 		} while (cursor !== '0')
@@ -343,7 +389,7 @@ return value
 		if (useScan) {
 			await this.scanKeyBatches(pattern, CacheXS.batchSize, operation)
 		} else {
-			const keys = await this._redisClient.keys(this.concatenatePattern(pattern))
+			const keys = await this.redisClient.keys(this.concatenatePattern(pattern))
 			await operation(keys)
 		}
 	}
@@ -359,7 +405,7 @@ return value
 	 *
 	 * @example
 	 * await this.forEachKeyBatch(['app:first', 'app:second'], async (batch) => {
-	 *   await this._redisClient.del(...batch);
+	 *   await this.redisClient.del(...batch);
 	 * });
 	 */
 	private async forEachKeyBatch(keys: string[], operation: (batch: string[]) => Promise<void>): Promise<void> {
@@ -388,7 +434,7 @@ return value
 	private async deleteKeys(keys: string[]): Promise<number> {
 		let deleted = 0
 		await this.forEachKeyBatch(keys, async (batch) => {
-			const count = await this._redisClient.del(...batch)
+			const count = await this.redisClient.del(...batch)
 			deleted += count
 		})
 		return deleted
@@ -413,11 +459,11 @@ return value
 	private async getOrSetValue<T>(key: string, value: T, expiresIn?: number): Promise<T> {
 		if (expiresIn !== undefined) this.validateExpiry(expiresIn)
 		const keyWithNamespace = this.concatenateKey(key)
-		let existingValue = await this._redisClient.get(keyWithNamespace)
+		let existingValue = await this.redisClient.get(keyWithNamespace)
 
 		// Keep cache hits to a GET and avoid serializing unused fallback values.
 		if (existingValue === null) {
-			existingValue = (await this._redisClient.send('EVAL', [
+			existingValue = (await this.redisClient.send('EVAL', [
 				CacheXS.getOrSetScript,
 				'1',
 				keyWithNamespace,
@@ -475,7 +521,7 @@ return value
 	public async get<T>(key: string): Promise<T | null> {
 		const keyWithNamespace = this.concatenateKey(key)
 
-		const value = await this._redisClient.get(keyWithNamespace)
+		const value = await this.redisClient.get(keyWithNamespace)
 
 		if (this._enableDebug) {
 			console.debug(`CacheXS -> Get -> ${keyWithNamespace}: ${value}`)
@@ -505,7 +551,7 @@ return value
 		const keyWithNamespace = this.concatenateKey(key)
 		const parsedValue = this.serializeValue(value)
 
-		const result = await this._redisClient.set(keyWithNamespace, parsedValue, 'EX', expiresIn)
+		const result = await this.redisClient.set(keyWithNamespace, parsedValue, 'EX', expiresIn)
 
 		if (this._enableDebug) {
 			console.debug(`CacheXS -> Set (For: ${expiresIn} Sec.) -> ${keyWithNamespace}: ${parsedValue}`)
@@ -532,7 +578,7 @@ return value
 		const keyWithNamespace = this.concatenateKey(key)
 		const parsedValue = this.serializeValue(value)
 
-		await this._redisClient.set(keyWithNamespace, parsedValue)
+		await this.redisClient.set(keyWithNamespace, parsedValue)
 
 		if (this._enableDebug) {
 			console.debug(`CacheXS -> Set (Forever) -> ${keyWithNamespace}: ${parsedValue}`)
@@ -562,7 +608,7 @@ return value
 	): Promise<'OK' | 'EXIST'> {
 		this.validateExpiry(expiresIn)
 		const keyWithNamespace = this.concatenateKey(key)
-		const result = await this._redisClient.set(
+		const result = await this.redisClient.set(
 			keyWithNamespace,
 			this.serializeValue(value),
 			'EX',
@@ -622,7 +668,7 @@ return value
 	 */
 	public async increment(key: string): Promise<number> {
 		const keyWithNamespace = this.concatenateKey(key)
-		const value = await this._redisClient.incr(keyWithNamespace)
+		const value = await this.redisClient.incr(keyWithNamespace)
 
 		if (this._enableDebug) {
 			console.debug(`CacheXS -> Increment -> ${keyWithNamespace}: ${value}`)
@@ -644,7 +690,7 @@ return value
 	 */
 	public async decrement(key: string): Promise<number> {
 		const keyWithNamespace = this.concatenateKey(key)
-		const value = await this._redisClient.decr(keyWithNamespace)
+		const value = await this.redisClient.decr(keyWithNamespace)
 
 		if (this._enableDebug) {
 			console.debug(`CacheXS -> Decrement -> ${keyWithNamespace}: ${value}`)
@@ -665,7 +711,7 @@ return value
 
 	public async expire(key: string, expiresIn: number): Promise<void> {
 		const keyWithNamespace = this.concatenateKey(key)
-		await this._redisClient.expire(keyWithNamespace, expiresIn)
+		await this.redisClient.expire(keyWithNamespace, expiresIn)
 
 		if (this._enableDebug) {
 			console.debug(`CacheXS -> Expire -> ${keyWithNamespace}: ${expiresIn}`)
@@ -682,7 +728,7 @@ return value
 	 */
 	public async expireNow(key: string): Promise<void> {
 		const keyWithNamespace = this.concatenateKey(key)
-		await this._redisClient.expire(keyWithNamespace, 0)
+		await this.redisClient.expire(keyWithNamespace, 0)
 
 		if (this._enableDebug) {
 			console.debug(`CacheXS -> Expire Now -> ${keyWithNamespace}`)
@@ -700,7 +746,7 @@ return value
 	 */
 	public async ttl(key: string): Promise<number> {
 		const keyWithNamespace = this.concatenateKey(key)
-		const ttl = await this._redisClient.ttl(keyWithNamespace)
+		const ttl = await this.redisClient.ttl(keyWithNamespace)
 
 		if (this._enableDebug) {
 			console.debug(`CacheXS -> TTL -> ${keyWithNamespace}: ${ttl}`)
@@ -720,7 +766,7 @@ return value
 	public async incrementWithExpiry(key: string, expiresIn: number): Promise<number> {
 		this.validateExpiry(expiresIn)
 		const keyWithNamespace = this.concatenateKey(key)
-		const value = (await this._redisClient.send('EVAL', [
+		const value = (await this.redisClient.send('EVAL', [
 			CacheXS.incrementWithExpiryScript,
 			'1',
 			keyWithNamespace,
@@ -747,7 +793,7 @@ return value
 	public async delete(key: string): Promise<void> {
 		const keyWithNamespace = this.concatenateKey(key)
 
-		await this._redisClient.del(keyWithNamespace)
+		await this.redisClient.del(keyWithNamespace)
 
 		if (this._enableDebug) {
 			console.debug(`CacheXS -> Delete -> ${key}`)
@@ -772,7 +818,7 @@ return value
 		}
 
 		await this.forEachKeyBatch(keys, async (batch) => {
-			await this._redisClient.del(...batch.map((key) => this.concatenateKey(key)))
+			await this.redisClient.del(...batch.map((key) => this.concatenateKey(key)))
 		})
 
 		if (this._enableDebug) {
@@ -806,7 +852,7 @@ return value
 	 */
 	public async exists(key: string): Promise<boolean> {
 		const keyWithNamespace = this.concatenateKey(key)
-		const isExists = await this._redisClient.exists(keyWithNamespace)
+		const isExists = await this.redisClient.exists(keyWithNamespace)
 
 		if (this._enableDebug) {
 			console.debug(`CacheXS -> Has -> ${keyWithNamespace}? ${isExists}`)
@@ -828,7 +874,7 @@ return value
 	 */
 	public async missing(key: string): Promise<boolean> {
 		const keyWithNamespace = this.concatenateKey(key)
-		const isExists = await this._redisClient.exists(keyWithNamespace)
+		const isExists = await this.redisClient.exists(keyWithNamespace)
 
 		if (this._enableDebug) {
 			console.debug(`CacheXS -> Missing -> ${keyWithNamespace}? ${isExists}`)
@@ -887,7 +933,7 @@ return value
 	 */
 	public async keys(pattern: string): Promise<string[]> {
 		const patternWithNamespace = this.concatenatePattern(pattern)
-		const keys = await this._redisClient.keys(patternWithNamespace)
+		const keys = await this.redisClient.keys(patternWithNamespace)
 
 		const prefixLength = this._namespace ? this._namespace.length + 1 : 0
 		const keysWithoutNamespace = keys.map((key) => key.slice(prefixLength))
@@ -918,7 +964,7 @@ return value
 
 		await this.matchingKeyBatches(pattern, useScan, async (keys) => {
 			await this.forEachKeyBatch(keys, async (batch) => {
-				const values = await this._redisClient.mget(...batch)
+				const values = await this.redisClient.mget(...batch)
 				for (let offset = 0; offset < batch.length; offset++) {
 					// Defining an own property also handles Redis keys named __proto__.
 					Object.defineProperty(result, batch[offset].slice(prefixLength), {
@@ -977,7 +1023,7 @@ return value
 	 * console.log(result); // "PONG"
 	 */
 	public async ping(message?: string): Promise<string> {
-		const result = await this._redisClient.ping(message)
+		const result = await this.redisClient.ping(message)
 
 		if (this._enableDebug) {
 			console.debug(`CacheXS -> Ping -> Message: ${message}, Result: ${result}`)
@@ -998,7 +1044,7 @@ return value
 	 */
 	public async isConnected(): Promise<boolean> {
 		try {
-			const result = await this._redisClient.ping()
+			const result = await this.redisClient.ping()
 			if (this._enableDebug) {
 				console.debug(`CacheXS -> Is Connected -> Result: ${result}`)
 			}
@@ -1013,14 +1059,18 @@ return value
 
 	/**
 	 * Gets the Redis connection.
+	 * Retrieve it for each operation because recovery can replace it.
 	 *
 	 * @returns {Redis} The Redis connection.
+	 * @throws {Error} If the cache has been closed.
 	 * @example
 	 * const cache = new CacheXS();
 	 * const redis = cache.redisClient;
 	 * redis.set('key', 'value');
 	 */
 	public get redisClient(): RedisClient {
+		if (this._closed) throw new Error('CacheXS is closed')
+
 		return this._redisClient
 	}
 
