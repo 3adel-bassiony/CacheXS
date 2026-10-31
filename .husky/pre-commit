@@ -1,2 +1,2 @@
 bun run lint
-bun run tsc
+bun check

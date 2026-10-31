@@ -1,21 +1,21 @@
 {
 	"name": "cachexs",
 	"description": "A lightweight and simple package for caching data in redis for bun",
-	"version": "2.7.0",
+	"version": "2.8.0",
 	"main": "build/index.js",
 	"types": "build/index.d.ts",
 	"files": [
 		"build/**/*"
 	],
 	"scripts": {
-		"clean": "rm -rf build && echo 'Done.'",
-		"build": "bun run clean && tsc",
+		"clean": "rm -rf build tsconfig.tsbuildinfo tsconfig.build.tsbuildinfo",
+		"build": "bun run clean && tsc --project tsconfig.build.json",
 		"lint": "eslint . --ext=.ts",
 		"format": "prettier --write .",
 		"test": "bun test",
 		"test:watch": "bun test --watch",
 		"coverage": "bun test --coverage",
-		"bench": "bun test --bench",
+		"bench": "bun run src/tests/package.bench.ts",
 		"prepare": "husky install"
 	},
 	"repository": {
@@ -26,8 +26,11 @@
 		"cache",
 		"cache manager",
 		"redis",
-		"ioredis"
+		"bun"
 	],
+	"engines": {
+		"bun": ">=1.4.4"
+	},
 	"author": "Adel Bassiony",
 	"license": "MIT",
 	"bugs": {

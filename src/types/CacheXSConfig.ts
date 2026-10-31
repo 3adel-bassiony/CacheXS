@@ -1,4 +1,4 @@
-import { RedisClient, RedisOptions } from 'bun'
+import type { RedisClient, RedisOptions } from 'bun'
 
 export type CacheXSConfig = {
 	redisClient?: RedisClient

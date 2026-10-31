@@ -6,7 +6,9 @@
 ![gh-workflow-image](https://img.shields.io/github/actions/workflow/status/3adel-bassiony/cachexs/main.yml)
 ![NPM](https://img.shields.io/npm/l/cachexs)
 
-Discover CacheXS, a remarkably efficient library for JavaScript and Bun, ideal for developers prioritizing performance and simplicity. Written in TypeScript, and it uses bun redis under the hood, it offers seamless integration for both TypeScript and JavaScript projects. Its compact size belies its powerful functionality, making it perfect for lightweight, modern applications. With ESM compatibility, CacheXS aligns with contemporary development practices, ensuring its utility in a range of projects from small-scale to complex.
+Discover CacheXS, a lightweight Redis caching library designed for performance and simplicity in JavaScript and TypeScript applications running on Bun. Written in TypeScript and powered by [Bun's native `RedisClient`](https://bun.com/docs/runtime/redis), it provides a straightforward API for caching data, controlling expiration, and managing namespaced keys. Its compact package has no runtime dependencies and includes atomic conditional writes, expiring counters, and efficient batch operations. With ESM support, CacheXS works with modern Bun projects, from small utilities to larger services.
+
+CacheXS requires Bun 1.4.4 or newer and a Redis server.
 
 &nbsp;
 
@@ -81,7 +83,7 @@ const cacheXS = new CacheXS({
 And then you can use it like this:
 
 ```typescript
-const cachedData = cacheXS.get('foo') // -> Bar
+const cachedData = await cacheXS.get('foo') // -> cached value, or null if missing
 ```
 
 &nbsp;
@@ -128,6 +130,18 @@ The CacheXS package comes with a comprehensive set of features designed to make 
         })
         ```
 
+        `configure` updates only the supplied settings. Changing the namespace, expiration, or debug setting keeps the current connection. Supplying a Redis URL or options creates a replacement connection and closes the previous connection if CacheXS created it. Injected clients remain owned by the caller.
+
+        You can import the configuration type from the package root:
+
+        ```typescript
+        import CacheXS, { type CacheXSConfig } from 'cachexs'
+        ```
+
+        Values written through CacheXS preserve strings, including empty strings and JSON-like strings, as well as JSON objects, arrays, numbers, booleans, and null. `undefined` is stored as JSON null. Existing raw Redis strings and JSON values remain readable; numeric values remain compatible with Redis counters. Direct reads through `redisClient` return the serialized value.
+
+        Expiring writes require a positive safe integer number of seconds. Use the `Forever` methods to store entries without expiration. `setIfNotExists` uses atomic `SET NX`; `getOrSet`, `getOrSetForever`, and `incrementWithExpiry` use Lua scripts for atomic updates. Redis ACLs must allow `EVAL` and the commands used by those methods (`GET`, `SET`, `INCR`, and `EXPIRE`).
+
 -   ### Methods/Properties
 
     -   `get` Retrieves the value associated with the specified key from the cache.
@@ -152,19 +166,19 @@ The CacheXS package comes with a comprehensive set of features designed to make 
         await cacheXS.setForever('user', { name: 'John Doe', age: 30 })
         ```
 
-    -   `setIfNotExists` Sets a value in the cache only if the key does not already exist.
+    -   `setIfNotExists` Atomically sets a value only if the key does not already exist. Returns `'OK'` when stored and `'EXIST'` when already present, without changing the existing value or expiration.
 
         ```typescript
         await cacheXS.setIfNotExists('myKey', 'myValue', 360) // expires in 360 seconds
         ```
 
-    -   `getOrSet` Retrieves the value associated with the specified key from the cache. If the value does not exist, it sets the value to the provided fallback value and returns it.
+    -   `getOrSet` Returns the cached value, including `false`, `0`, `''`, or `null`. If the key is missing, atomically stores the fallback and returns the value stored by the winning writer.
 
         ```typescript
         const username = await cacheXS.getOrSet('myKey', 'myValue', 360) // expires in 360 seconds
         ```
 
-    -   `getOrSetForever` Retrieves the value associated with the specified key from the cache. If the value does not exist, it sets the specified fallback value in the cache and returns it.
+    -   `getOrSetForever` Uses the same conditional behavior as `getOrSet`, storing new entries without expiration. Existing entries keep their expiration.
 
         ```typescript
         value = await cacheXS.getOrSetForever('myKey', 'defaultValue')
@@ -182,6 +196,12 @@ The CacheXS package comes with a comprehensive set of features designed to make 
         ```typescript
         const newValue = await cacheXS.decrement('count') // -> -1 (if key doesn't exist)
         const nextValue = await cacheXS.decrement('count') // -> -2
+        ```
+
+    -   `incrementWithExpiry` Atomically increments a counter and sets its expiration when the resulting value is `1`. Later increments keep the original expiration.
+
+        ```typescript
+        const hits = await cacheXS.incrementWithExpiry('hits', 60)
         ```
 
     -   `expire` Sets the expiration time for a key.
@@ -208,13 +228,13 @@ The CacheXS package comes with a comprehensive set of features designed to make 
         await cacheXS.delete('myKey')
         ```
 
-    -   `deleteMany` Deletes multiple cache entries specified by the given keys.
+    -   `deleteMany` Deletes multiple entries using batches of up to 500 keys per `DEL` command, with at most 32 pending commands so Bun can pipeline them.
 
         ```typescript
         await cacheXS.deleteMany(['myKey', 'myKey2', 'myKey3'])
         ```
 
-    -   `clear` Clears all cache entries in the CacheXS instance.
+    -   `clear` Uses `SCAN` and batched deletion to clear the configured namespace. With the default empty namespace, it clears all keys in the selected Redis database.
 
         ```typescript
         await cacheXS.clear()
@@ -232,7 +252,7 @@ The CacheXS package comes with a comprehensive set of features designed to make 
         await cacheXS.missing('myKey') // -> true || false
         ```
 
-    -   `scan` Finds keys matching a pattern using the SCAN command (non-blocking, recommended for production).
+    -   `scan` Finds unique keys matching a Redis glob pattern using `SCAN`. Namespace characters are treated literally. Returned keys omit the namespace prefix. The count is a positive integer scan hint, not a limit on the total number of results.
 
         ```typescript
         const userKeys = await cacheXS.scan('user:*') // -> ['user:123', 'user:456']
@@ -245,22 +265,22 @@ The CacheXS package comes with a comprehensive set of features designed to make 
         const userKeys = await cacheXS.keys('user:*') // -> ['user:123', 'user:456']
         ```
 
-    -   `getByPattern` Retrieves multiple values by pattern matching.
+    -   `getByPattern` Retrieves matching values using `SCAN` and `MGET` batches of up to 500 keys. Keys that disappear or have a non-string Redis type are returned with a null value, following `MGET` semantics.
 
         ```typescript
         const userData = await cacheXS.getByPattern<User>('user:*')
         // -> { 'user:123': {...}, 'user:456': {...} }
-        
+
         // Use KEYS command instead of SCAN
         const configData = await cacheXS.getByPattern('config:*', false)
         ```
 
-    -   `deleteByPattern` Deletes keys matching a pattern.
+    -   `deleteByPattern` Deletes matching keys in batches and returns the number actually deleted. Keys that expired before deletion are excluded from the count.
 
         ```typescript
         const deletedCount = await cacheXS.deleteByPattern('session:*:expired')
         console.log(`Deleted ${deletedCount} expired sessions`)
-        
+
         // Use KEYS command instead of SCAN
         const count = await cacheXS.deleteByPattern('temp:*', false)
         ```
@@ -275,6 +295,19 @@ The CacheXS package comes with a comprehensive set of features designed to make 
 
         ```typescript
         cacheXS.redisClient // -> Bun redis instance
+        ```
+
+    -   `ping` Sends a Redis ping, optionally echoing a message.
+
+        ```typescript
+        await cacheXS.ping() // -> 'PONG'
+        await cacheXS.ping('hello') // -> 'hello'
+        ```
+
+    -   `isConnected` Checks Redis with a ping and returns `false` if the connection fails.
+
+        ```typescript
+        const connected = await cacheXS.isConnected()
         ```
 
     -   `redisUrl` Gets the Redis URL.
@@ -344,6 +377,27 @@ Update the README or documentation with details of changes, this includes new en
 Increase the version numbers in any example files and the README to the new version that this Pull Request would represent.
 
 &nbsp;
+
+## Development checks
+
+Install Bun and the `redis-server` executable, then run:
+
+```bash
+bun install --frozen-lockfile
+bun check
+bun run lint
+bun run build
+bun test --coverage
+bun run bench
+```
+
+`bun check` uses Bun's native TypeScript checker and discovers the library source, tests, and benchmarks through `tsconfig.json`. The build uses `tsconfig.build.json` to emit only library files.
+
+The full suite is verified on Bun 1.4.4. Bun 1.3.2 crashes while running the Redis tests and is not supported.
+
+Tests keep the existing `bun:test` describe/it structure in `src/tests/package.test.ts`. Tests and benchmarks start their own temporary Redis process on an available loopback port, disable persistence, and remove it afterward. They do not use your application's Redis server or `REDIS_URL`.
+
+The benchmark reports median durations and Redis command counts after two warmup runs. It uses 10,000 keys and seven measured samples by default; customize these with `CACHEXS_BENCH_KEYS` and `CACHEXS_BENCH_SAMPLES`.
 
 # License
 

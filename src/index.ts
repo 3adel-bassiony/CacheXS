@@ -1,17 +1,61 @@
-import { redis, RedisClient, RedisOptions } from 'bun'
+import { RedisClient, type RedisOptions } from 'bun'
 
-import { CacheXSConfig } from './types/CacheXSConfig'
+import type { CacheXSConfig } from './types/CacheXSConfig'
+
+export type { CacheXSConfig } from './types/CacheXSConfig'
 
 export default class CacheXS {
 	/**
+	 * The maximum number of Redis keys processed in a single batch.
+	 */
+	private static readonly batchSize = 500
+
+	/**
+	 * The maximum number of batch operations allowed to run concurrently.
+	 */
+	private static readonly maxPendingBatches = 32
+
+	/**
+	 * Atomically retrieves a value or stores a serialized fallback when the key is missing.
+	 * KEYS[1] is the full Redis key and ARGV[1] is the serialized fallback.
+	 * ARGV[2] is the expiration in seconds, or an empty string for an entry without expiration.
+	 * Returns the existing value, or a Redis null reply after storing the fallback.
+	 */
+	private static readonly getOrSetScript = `
+local value = redis.call('GET', KEYS[1])
+if value then return value end
+if ARGV[2] == '' then
+	redis.call('SET', KEYS[1], ARGV[1])
+else
+	redis.call('SET', KEYS[1], ARGV[1], 'EX', ARGV[2])
+end
+return false
+`
+
+	/**
+	 * Atomically increments KEYS[1] and sets its expiration from ARGV[1] when the result is 1.
+	 * Returns the counter value after incrementing.
+	 */
+	private static readonly incrementWithExpiryScript = `
+local value = redis.call('INCR', KEYS[1])
+if value == 1 then redis.call('EXPIRE', KEYS[1], ARGV[1]) end
+return value
+`
+
+	/**
 	 * The Redis connection used by the CacheXS package.
 	 */
-	protected _redisClient = redis
+	protected _redisClient: RedisClient
+
+	/**
+	 * Indicates whether CacheXS created the Redis client and is responsible for closing it.
+	 */
+	private _ownsRedisClient = false
 
 	/**
 	 * The URL of the Redis server.
 	 */
-	protected _redisUrl: string | undefined = process.env.REDIS_URL
+	protected _redisUrl: string | undefined
 
 	/**
 	 * Redis configuration options.
@@ -89,33 +133,47 @@ export default class CacheXS {
 	 *   enableDebug: true,
 	 * });
 	 *
-	 * // Configure CacheXS with Redis configuration object
+	 * // Configure CacheXS with native Bun Redis options
 	 * const cache = new CacheXS();
 	 * cache.configureCacheXS({
+	 *   redisUrl: 'redis://localhost:6379',
 	 *   redisOptions: {
-	 *     host: 'localhost',
-	 *     port: 6379,
-	 *     password: '',
+	 *     connectionTimeout: 5000,
 	 *   },
 	 *   namespace: 'cacheXS',
 	 *   expiresIn: 60,
 	 *   enableDebug: true,
 	 * });
 	 */
-	protected configureCacheXS({
-		redisClient,
-		redisOptions,
-		redisUrl,
-		namespace = '',
-		expiresIn = 300,
-		enableDebug = false,
-	}: CacheXSConfig) {
-		if (redisClient) {
-			this._redisClient = redisClient
-			this._redisOptions = redisOptions
-		} else {
-			this._redisClient = new RedisClient(redisUrl, redisOptions)
-			this._redisUrl = redisUrl
+	protected configureCacheXS(options: CacheXSConfig) {
+		const {
+			redisClient,
+			redisOptions,
+			redisUrl,
+			namespace = this._namespace ?? '',
+			expiresIn = this._expiresIn ?? 300,
+			enableDebug = this._enableDebug ?? false,
+		} = options
+		this.validateExpiry(expiresIn)
+
+		if (redisClient || !this._redisClient || redisUrl !== undefined || redisOptions !== undefined) {
+			const previousClient = this._redisClient
+			const previousOwned = this._ownsRedisClient
+			const replacingWithExternalClient = redisClient && redisClient !== previousClient
+			const nextUrl = replacingWithExternalClient ? redisUrl : redisUrl ?? this._redisUrl
+			const nextOptions = replacingWithExternalClient ? redisOptions : redisOptions ?? this._redisOptions
+			const nextClient = redisClient ?? new RedisClient(nextUrl, nextOptions)
+
+			this._redisClient = nextClient
+			this._ownsRedisClient = nextClient === previousClient ? previousOwned : !redisClient
+			this._redisUrl = nextUrl
+			this._redisOptions = nextOptions
+
+			if (previousOwned && previousClient !== nextClient) {
+				// Intentional replacement must not trigger an old reconnect handler.
+				previousClient.onclose = null
+				previousClient.close()
+			}
 		}
 
 		this._namespace = namespace
@@ -132,26 +190,247 @@ export default class CacheXS {
 	 * @example
 	 * const cache = new CacheXS();
 	 * cache.configure({
+	 *   redisUrl: 'redis://localhost:6379',
 	 *   redisOptions: {
-	 * 		host: 'localhost',
-	 *    	port: 6379,
-	 *     	password: ''
-	 * 	 },
+	 *     connectionTimeout: 5000,
+	 *   },
 	 *   namespace: 'cacheXS',
 	 *   expiresIn: 60,
 	 *   enableDebug: true
 	 * });
 	 */
-	public configure({
-		redisClient,
-		redisOptions,
-		redisUrl,
-		namespace = '',
-		expiresIn = 300,
-		enableDebug = false,
-	}: CacheXSConfig): CacheXS {
-		this.configureCacheXS({ redisClient, redisOptions, redisUrl, namespace, expiresIn, enableDebug })
+	public configure(options: CacheXSConfig): CacheXS {
+		this.configureCacheXS(options)
 		return this
+	}
+
+	/**
+	 * Validates the expiration time used when creating an expiring cache entry.
+	 *
+	 * @param {number} expiresIn - The expiration time in seconds.
+	 * @returns {void} Returns normally when the expiration time is valid.
+	 * @throws {RangeError} If expiresIn is not a positive safe integer.
+	 *
+	 * @example
+	 * this.validateExpiry(60);
+	 */
+	private validateExpiry(expiresIn: number): void {
+		if (!Number.isSafeInteger(expiresIn) || expiresIn <= 0) {
+			throw new RangeError('expiresIn must be a positive safe integer in seconds')
+		}
+	}
+
+	/**
+	 * Serializes a cache value for storage in Redis.
+	 * Objects and strings are JSON encoded, while null and undefined are stored as JSON null.
+	 *
+	 * @param {unknown} value - The value to serialize.
+	 * @returns {string} The serialized value, with numeric values compatible with Redis counters.
+	 * @throws {TypeError} If JSON serialization fails, such as for an object with circular references.
+	 *
+	 * @example
+	 * const objectValue = this.serializeValue({ active: true }); // '{"active":true}'
+	 * const stringValue = this.serializeValue('123'); // '"123"'
+	 * const nullValue = this.serializeValue(undefined); // 'null'
+	 */
+	private serializeValue(value: unknown): string {
+		if (typeof value === 'object' || typeof value === 'string') {
+			return JSON.stringify(value) ?? 'null'
+		}
+
+		return value?.toString() ?? 'null'
+	}
+
+	/**
+	 * Deserializes a Redis value, preserving raw strings that are not valid JSON.
+	 *
+	 * @template T - The expected type of the cached value.
+	 * @param {string | null} value - The raw Redis value, or null when the key is missing.
+	 * @returns {T | null} The parsed value, the original raw string, or null for a missing or JSON null value.
+	 *
+	 * @example
+	 * const count = this.deserializeValue<number>('42'); // 42
+	 * const message = this.deserializeValue<string>('hello'); // 'hello'
+	 * const missing = this.deserializeValue<string>(null); // null
+	 */
+	private deserializeValue<T>(value: string | null): T | null {
+		if (value === null) return null
+
+		try {
+			return JSON.parse(value) as T
+		} catch {
+			return value as T
+		}
+	}
+
+	/**
+	 * Prefixes a Redis glob pattern with the namespace, escaping pattern characters in the namespace.
+	 * An already-prefixed pattern is accepted without duplicating the namespace.
+	 *
+	 * @param {string} pattern - The Redis glob pattern to match within the namespace.
+	 * @returns {string} The pattern with a literal namespace prefix, or the original pattern for an empty namespace.
+	 *
+	 * @example
+	 * // With namespace "myNamespace":
+	 * const pattern = this.concatenatePattern('user:*');
+	 * console.log(pattern); // Output: "myNamespace:user:*"
+	 */
+	private concatenatePattern(pattern: string): string {
+		if (!this._namespace) return pattern
+
+		const prefix = `${this._namespace}:`
+		const localPattern = pattern.startsWith(prefix) ? pattern.slice(prefix.length) : pattern
+		const escapedPrefix = prefix.replace(/[\\*?[\]]/g, '\\$&')
+
+		return `${escapedPrefix}${localPattern}`
+	}
+
+	/**
+	 * Processes non-empty pages of full Redis keys using SCAN.
+	 * Continues until the cursor reaches zero, including when intermediate pages are empty.
+	 * SCAN can return duplicate keys, and its count is a hint rather than a limit on page size.
+	 * Awaits the operation for each page before requesting the next page.
+	 *
+	 * @param {string} pattern - The Redis glob pattern to match within the namespace.
+	 * @param {number} count - The positive safe integer scan count hint.
+	 * @param {(batch: string[]) => void | Promise<void>} operation - The operation to run on each page of full Redis keys.
+	 * @returns {Promise<void>} A promise that resolves when all pages are processed, or rejects if scanning or processing fails.
+	 * @throws {RangeError} If count is not a positive safe integer.
+	 *
+	 * @example
+	 * await this.scanKeyBatches('user:*', 100, (keys) => {
+	 *   console.debug(keys);
+	 * });
+	 */
+	private async scanKeyBatches(
+		pattern: string,
+		count: number,
+		operation: (batch: string[]) => void | Promise<void>
+	): Promise<void> {
+		if (!Number.isSafeInteger(count) || count <= 0) {
+			throw new RangeError('count must be a positive safe integer')
+		}
+
+		const namespacedPattern = this.concatenatePattern(pattern)
+		let cursor = '0'
+		do {
+			const [nextCursor, keys] = await this._redisClient.scan(cursor, 'MATCH', namespacedPattern, 'COUNT', count)
+			cursor = nextCursor
+			if (keys.length > 0) await operation(keys)
+		} while (cursor !== '0')
+	}
+
+	/**
+	 * Processes matching full Redis keys using SCAN pages or a single KEYS result.
+	 * The KEYS option collects all matches with a blocking Redis command.
+	 * Awaits each operation so SCAN pages are processed incrementally.
+	 *
+	 * @param {string} pattern - The Redis glob pattern to match within the namespace.
+	 * @param {boolean} useScan - Whether to use SCAN (true) or KEYS (false).
+	 * @param {(batch: string[]) => void | Promise<void>} operation - The operation to run on each batch of full Redis keys.
+	 * @returns {Promise<void>} A promise that resolves when all matches are processed, or rejects if retrieval or processing fails.
+	 *
+	 * @example
+	 * await this.matchingKeyBatches('session:*', true, async (keys) => {
+	 *   await this.deleteKeys(keys);
+	 * });
+	 */
+	private async matchingKeyBatches(
+		pattern: string,
+		useScan: boolean,
+		operation: (batch: string[]) => void | Promise<void>
+	): Promise<void> {
+		if (useScan) {
+			await this.scanKeyBatches(pattern, CacheXS.batchSize, operation)
+		} else {
+			const keys = await this._redisClient.keys(this.concatenatePattern(pattern))
+			await operation(keys)
+		}
+	}
+
+	/**
+	 * Splits keys into batches and processes a bounded number of batches concurrently.
+	 * Each batch contains at most batchSize keys, with at most maxPendingBatches operations pending.
+	 * Keys are passed to the operation without modifying their namespace prefixes.
+	 *
+	 * @param {string[]} keys - The keys to process.
+	 * @param {(batch: string[]) => Promise<void>} operation - The asynchronous operation to run for each batch.
+	 * @returns {Promise<void>} A promise that resolves when all batches finish, or rejects if an operation fails.
+	 *
+	 * @example
+	 * await this.forEachKeyBatch(['app:first', 'app:second'], async (batch) => {
+	 *   await this._redisClient.del(...batch);
+	 * });
+	 */
+	private async forEachKeyBatch(keys: string[], operation: (batch: string[]) => Promise<void>): Promise<void> {
+		// Bound pending work while allowing Bun to pipeline independent batches.
+		const windowSize = CacheXS.batchSize * CacheXS.maxPendingBatches
+		for (let start = 0; start < keys.length; start += windowSize) {
+			const pending: Promise<void>[] = []
+			const end = Math.min(start + windowSize, keys.length)
+			for (let index = start; index < end; index += CacheXS.batchSize) {
+				pending.push(operation(keys.slice(index, index + CacheXS.batchSize)))
+			}
+			await Promise.all(pending)
+		}
+	}
+
+	/**
+	 * Deletes full Redis keys in bounded batches without adding namespace prefixes.
+	 *
+	 * @param {string[]} keys - The full Redis keys to delete.
+	 * @returns {Promise<number>} A promise that resolves to the number of keys actually deleted, excluding missing keys.
+	 *
+	 * @example
+	 * const deleted = await this.deleteKeys(['app:first', 'app:second']);
+	 * console.log(deleted); // Output: 2 if both keys existed
+	 */
+	private async deleteKeys(keys: string[]): Promise<number> {
+		let deleted = 0
+		await this.forEachKeyBatch(keys, async (batch) => {
+			const count = await this._redisClient.del(...batch)
+			deleted += count
+		})
+		return deleted
+	}
+
+	/**
+	 * Retrieves a cached value or atomically stores a fallback when the key is missing.
+	 * Cached falsy values and existing expiration times are preserved.
+	 * Cache hits use GET, while misses use a Lua script to check and create the entry atomically.
+	 *
+	 * @template T - The type of the cached value and fallback.
+	 * @param {string} key - The key to retrieve or create in the cache.
+	 * @param {T} value - The fallback value to store if the key is missing.
+	 * @param {number} [expiresIn] - The expiration in seconds for new entries; omit to store without expiration.
+	 * @returns {Promise<T>} A promise that resolves to the cached value or the fallback stored by the winning writer.
+	 * @throws {RangeError} If the supplied expiration is not a positive safe integer.
+	 *
+	 * @example
+	 * const temporary = await this.getOrSetValue('username', 'guest', 60);
+	 * const permanent = await this.getOrSetValue('appName', 'My App');
+	 */
+	private async getOrSetValue<T>(key: string, value: T, expiresIn?: number): Promise<T> {
+		if (expiresIn !== undefined) this.validateExpiry(expiresIn)
+		const keyWithNamespace = this.concatenateKey(key)
+		let existingValue = await this._redisClient.get(keyWithNamespace)
+
+		// Keep cache hits to a GET and avoid serializing unused fallback values.
+		if (existingValue === null) {
+			existingValue = (await this._redisClient.send('EVAL', [
+				CacheXS.getOrSetScript,
+				'1',
+				keyWithNamespace,
+				this.serializeValue(value),
+				expiresIn === undefined ? '' : String(expiresIn),
+			])) as string | null
+		}
+
+		if (this._enableDebug) {
+			console.debug(`CacheXS -> Get Or Set -> ${keyWithNamespace}`)
+		}
+
+		return existingValue === null ? value : (this.deserializeValue<T>(existingValue) as T)
 	}
 
 	/**
@@ -163,8 +442,7 @@ export default class CacheXS {
 	 * @returns The concatenated key.
 	 *
 	 * @example
-	 * const cache = new CacheXS();
-	 * cache.setNamespace("myNamespace");
+	 * const cache = new CacheXS({ namespace: "myNamespace" });
 	 * const concatenatedKey = cache.concatenateKey("myKey");
 	 * console.log(concatenatedKey); // Output: "myNamespace:myKey"
 	 */
@@ -203,16 +481,7 @@ export default class CacheXS {
 			console.debug(`CacheXS -> Get -> ${keyWithNamespace}: ${value}`)
 		}
 
-		if (value) {
-			try {
-				const parsedData = JSON.parse(value) as T
-				return parsedData
-			} catch {
-				return value as T
-			}
-		}
-
-		return null
+		return this.deserializeValue<T>(value)
 	}
 
 	/**
@@ -221,30 +490,25 @@ export default class CacheXS {
 	 * @template T - The type of the value being set.
 	 * @param {string} key - The key under which to store the value.
 	 * @param {T} value - The value to be stored.
-	 * @param {SetOptions} [options] - Optional settings for the cache entry.
-	 * @returns {Promise<void>} - A Promise that resolves when the value is successfully set in the cache.
+	 * @param {number} [expiresIn] - The expiration time in seconds.
+	 * @returns {Promise<'OK' | null>} - The result of the Redis SET command.
 	 *
 	 * @example
 	 * // Set a string value with default expiration time
 	 * await cache.set('myKey', 'myValue');
 	 *
 	 * // Set an object value with custom expiration time
-	 * await cache.set('myKey', { name: 'John', age: 30 }, { expiresIn: 360 });
+	 * await cache.set('myKey', { name: 'John', age: 30 }, 360);
 	 */
 	public async set<T>(key: string, value: T, expiresIn: number = this._expiresIn): Promise<'OK' | null> {
+		this.validateExpiry(expiresIn)
 		const keyWithNamespace = this.concatenateKey(key)
-		let parsedValue: unknown
-
-		if (typeof value === 'object') {
-			parsedValue = JSON.stringify(value)
-		} else {
-			parsedValue = value?.toString() ?? ''
-		}
+		const parsedValue = this.serializeValue(value)
 
 		const result = await this._redisClient.set(keyWithNamespace, parsedValue, 'EX', expiresIn)
 
 		if (this._enableDebug) {
-			console.debug(`CacheXS -> Set (For: ${expiresIn} Sec.) -> ${keyWithNamespace}: ${value}`)
+			console.debug(`CacheXS -> Set (For: ${expiresIn} Sec.) -> ${keyWithNamespace}: ${parsedValue}`)
 		}
 
 		return result
@@ -266,38 +530,58 @@ export default class CacheXS {
 	 */
 	public async setForever<T>(key: string, value: T): Promise<void> {
 		const keyWithNamespace = this.concatenateKey(key)
-		let parsedValue: unknown
-
-		if (typeof value === 'object' && value !== null) {
-			parsedValue = JSON.stringify(value)
-		} else {
-			parsedValue = value?.toString() ?? ''
-		}
+		const parsedValue = this.serializeValue(value)
 
 		await this._redisClient.set(keyWithNamespace, parsedValue)
 
 		if (this._enableDebug) {
-			console.debug(`CacheXS -> Set (Forever) -> ${keyWithNamespace}: ${value}`)
+			console.debug(`CacheXS -> Set (Forever) -> ${keyWithNamespace}: ${parsedValue}`)
 		}
 	}
 
-	public async setIfNotExists<T>(key: string, value: T, expiresIn: number = this._expiresIn) {
+	/**
+	 * Atomically stores a value with expiration only when the key is missing.
+	 * Existing values and their expiration times are preserved.
+	 *
+	 * @template T - The type of the value being stored.
+	 * @param {string} key - The key under which to store the value.
+	 * @param {T} value - The value to store if the key is missing.
+	 * @param {number} [expiresIn] - The expiration in seconds, defaulting to the instance's configured expiration.
+	 * @returns {Promise<'OK' | 'EXIST'>} A promise resolving to 'OK' when created or 'EXIST' when already present.
+	 * @throws {RangeError} If expiresIn is not a positive safe integer.
+	 *
+	 * @example
+	 * const cache = new CacheXS();
+	 * const result = await cache.setIfNotExists('username', 'guest', 60);
+	 * console.log(result); // Output: 'OK' if created, or 'EXIST' if already cached
+	 */
+	public async setIfNotExists<T>(
+		key: string,
+		value: T,
+		expiresIn: number = this._expiresIn
+	): Promise<'OK' | 'EXIST'> {
+		this.validateExpiry(expiresIn)
 		const keyWithNamespace = this.concatenateKey(key)
-		const exists = await this.exists(keyWithNamespace)
+		const result = await this._redisClient.set(
+			keyWithNamespace,
+			this.serializeValue(value),
+			'EX',
+			String(expiresIn),
+			'NX'
+		)
 
-		if (exists) {
-			return 'EXIST'
+		if (this._enableDebug) {
+			console.debug(`CacheXS -> Set If Not Exists -> ${keyWithNamespace}: ${result ?? 'EXIST'}`)
 		}
 
-		const result = await this.set(key, value, expiresIn)
-		return result
+		return result === null ? 'EXIST' : 'OK'
 	}
 
 	/**
 	 * Retrieves the value associated with the specified key from the cache. If the value does not exist, it sets the value to the provided fallback value and returns it.
 	 * @param key - The key to retrieve or set the value for.
-	 * @param fallbackValue - The value to set if the key does not exist in the cache.
-	 * @param options - Optional settings for setting the value in the cache.
+	 * @param value - The fallback value to set if the key does not exist in the cache.
+	 * @param expiresIn - The expiration time in seconds for new entries.
 	 * @returns A Promise that resolves to the retrieved value or the fallback value if the key does not exist.
 	 *
 	 * @example
@@ -305,25 +589,7 @@ export default class CacheXS {
 	 * const username = await cache.getOrSet("username", "guest");
 	 */
 	public async getOrSet<T>(key: string, value: T, expiresIn: number = this._expiresIn): Promise<T> {
-		const keyWithNamespace = this.concatenateKey(key)
-
-		const existingValue = await this.get<T>(keyWithNamespace)
-
-		if (this._enableDebug) {
-			console.debug(`CacheXS -> Get -> ${keyWithNamespace}: ${existingValue}`)
-		}
-
-		if (existingValue) {
-			return existingValue
-		}
-
-		await this.set(key, value, expiresIn)
-
-		if (this._enableDebug) {
-			console.debug(`CacheXS -> Set (For: ${expiresIn} Sec.) -> ${keyWithNamespace}: ${existingValue}`)
-		}
-
-		return value
+		return this.getOrSetValue(key, value, expiresIn)
 	}
 
 	/**
@@ -340,24 +606,7 @@ export default class CacheXS {
 	 * console.log(value); // Output: "defaultValue" (if the key does not exist in the cache)
 	 */
 	public async getOrSetForever<T>(key: string, fallbackValue: T): Promise<T> {
-		const keyWithNamespace = this.concatenateKey(key)
-
-		const value = await this.get<T>(keyWithNamespace)
-
-		if (this._enableDebug) {
-			console.debug(`CacheXS -> Get -> ${keyWithNamespace}: ${value}`)
-		}
-
-		if (value) {
-			return value
-		}
-
-		await this.set(key, fallbackValue)
-
-		if (this._enableDebug) {
-			console.debug(`CacheXS -> Set (Forever) -> ${keyWithNamespace}: ${value}`)
-		}
-		return fallbackValue
+		return this.getOrSetValue(key, fallbackValue)
 	}
 
 	/**
@@ -469,13 +718,14 @@ export default class CacheXS {
 	 * const value = await cache.incrementWithExpiry("myKey", 60);
 	 */
 	public async incrementWithExpiry(key: string, expiresIn: number): Promise<number> {
+		this.validateExpiry(expiresIn)
 		const keyWithNamespace = this.concatenateKey(key)
-
-		const value = await this.increment(key)
-
-		if (value === 1) {
-			await this.expire(key, expiresIn)
-		}
+		const value = (await this._redisClient.send('EVAL', [
+			CacheXS.incrementWithExpiryScript,
+			'1',
+			keyWithNamespace,
+			String(expiresIn),
+		])) as number
 
 		if (this._enableDebug) {
 			console.debug(`CacheXS -> Increment With Expiry -> ${keyWithNamespace}: ${value}`)
@@ -521,9 +771,9 @@ export default class CacheXS {
 			return
 		}
 
-		const keysWithNamespace = keys.map((key) => this.concatenateKey(key))
-
-		await Promise.all(keysWithNamespace.map((key) => this._redisClient.del(key)))
+		await this.forEachKeyBatch(keys, async (batch) => {
+			await this._redisClient.del(...batch.map((key) => this.concatenateKey(key)))
+		})
 
 		if (this._enableDebug) {
 			console.debug(`CacheXS -> Delete Multiple -> ${keys.join(', ')}`)
@@ -538,11 +788,7 @@ export default class CacheXS {
 	 * await cache.clear();
 	 */
 	public async clear(): Promise<void> {
-		const keys = await this._redisClient.keys(`${this._namespace}:*`)
-
-		if (keys.length > 0) {
-			await Promise.all(keys.map((key) => this._redisClient.del(key)))
-		}
+		await this.deleteByPattern('*')
 
 		if (this._enableDebug) {
 			console.debug('CacheXS -> Clear All Cache')
@@ -611,35 +857,17 @@ export default class CacheXS {
 	 * const sessionKeys = await cache.scan("session:*", 50);
 	 */
 	public async scan(pattern: string, count: number = 100): Promise<string[]> {
-		let cursor = '0'
-		const keys: string[] = []
-		const patternWithNamespace = this.concatenateKey(pattern)
-
-		do {
-			// SCAN returns an array where the first element is the new cursor
-			// and the second element is an array of matched keys
-			const [nextCursor, matchedKeys] = (await this._redisClient.scan(
-				cursor,
-				'MATCH',
-				patternWithNamespace,
-				'COUNT',
-				count
-			)) as [string, string[]]
-
-			cursor = nextCursor
-
-			// Remove namespace prefix from results
-			const keysWithoutNamespace = matchedKeys.map((key) =>
-				this._namespace.length > 0 ? key.replace(`${this._namespace}:`, '') : key
-			)
-			keys.push(...keysWithoutNamespace)
-		} while (cursor !== '0')
+		const prefixLength = this._namespace ? this._namespace.length + 1 : 0
+		const keys = new Set<string>()
+		await this.scanKeyBatches(pattern, count, (batch) => {
+			for (const key of batch) keys.add(key.slice(prefixLength))
+		})
 
 		if (this._enableDebug) {
-			console.debug(`CacheXS -> Scan -> Pattern: ${pattern}, Found: ${keys.length} keys`)
+			console.debug(`CacheXS -> Scan -> Pattern: ${pattern}, Found: ${keys.size} keys`)
 		}
 
-		return keys
+		return [...keys]
 	}
 
 	/**
@@ -658,13 +886,11 @@ export default class CacheXS {
 	 * console.log(userKeys); // ["user:123", "user:456"]
 	 */
 	public async keys(pattern: string): Promise<string[]> {
-		const patternWithNamespace = this.concatenateKey(pattern)
+		const patternWithNamespace = this.concatenatePattern(pattern)
 		const keys = await this._redisClient.keys(patternWithNamespace)
 
-		// Remove namespace prefix from results
-		const keysWithoutNamespace = keys.map((key) =>
-			this._namespace.length > 0 ? key.replace(`${this._namespace}:`, '') : key
-		)
+		const prefixLength = this._namespace ? this._namespace.length + 1 : 0
+		const keysWithoutNamespace = keys.map((key) => key.slice(prefixLength))
 
 		if (this._enableDebug) {
 			console.debug(`CacheXS -> Keys -> Pattern: ${pattern}, Found: ${keysWithoutNamespace.length} keys`)
@@ -687,18 +913,28 @@ export default class CacheXS {
 	 * console.log(userData); // { "user:123": {...}, "user:456": {...} }
 	 */
 	public async getByPattern<T>(pattern: string, useScan: boolean = true): Promise<{ [key: string]: T | null }> {
-		const matchingKeys = useScan ? await this.scan(pattern) : await this.keys(pattern)
 		const result: { [key: string]: T | null } = {}
+		const prefixLength = this._namespace ? this._namespace.length + 1 : 0
 
-		// Use Promise.all for concurrent fetching
-		const values = await Promise.all(matchingKeys.map((key) => this.get<T>(key)))
-
-		matchingKeys.forEach((key, index) => {
-			result[key] = values[index]
+		await this.matchingKeyBatches(pattern, useScan, async (keys) => {
+			await this.forEachKeyBatch(keys, async (batch) => {
+				const values = await this._redisClient.mget(...batch)
+				for (let offset = 0; offset < batch.length; offset++) {
+					// Defining an own property also handles Redis keys named __proto__.
+					Object.defineProperty(result, batch[offset].slice(prefixLength), {
+						value: this.deserializeValue<T>(values[offset]),
+						enumerable: true,
+						configurable: true,
+						writable: true,
+					})
+				}
+			})
 		})
 
 		if (this._enableDebug) {
-			console.debug(`CacheXS -> Get By Pattern -> Pattern: ${pattern}, Retrieved: ${matchingKeys.length} items`)
+			console.debug(
+				`CacheXS -> Get By Pattern -> Pattern: ${pattern}, Retrieved: ${Object.keys(result).length} items`
+			)
 		}
 
 		return result
@@ -718,17 +954,16 @@ export default class CacheXS {
 	 * console.log(`Deleted ${deletedCount} expired sessions`);
 	 */
 	public async deleteByPattern(pattern: string, useScan: boolean = true): Promise<number> {
-		const matchingKeys = useScan ? await this.scan(pattern) : await this.keys(pattern)
-
-		if (matchingKeys.length > 0) {
-			await this.deleteMany(matchingKeys)
-		}
+		let deleted = 0
+		await this.matchingKeyBatches(pattern, useScan, async (keys) => {
+			deleted += await this.deleteKeys(keys)
+		})
 
 		if (this._enableDebug) {
-			console.debug(`CacheXS -> Delete By Pattern -> Pattern: ${pattern}, Deleted: ${matchingKeys.length} keys`)
+			console.debug(`CacheXS -> Delete By Pattern -> Pattern: ${pattern}, Deleted: ${deleted} keys`)
 		}
 
-		return matchingKeys.length
+		return deleted
 	}
 
 	/**
@@ -762,13 +997,18 @@ export default class CacheXS {
 	 * console.log(isConnected); // true or false
 	 */
 	public async isConnected(): Promise<boolean> {
-		const result = await this._redisClient.ping()
-
-		if (this._enableDebug) {
-			console.debug(`CacheXS -> Is Connected -> Result: ${result}`)
+		try {
+			const result = await this._redisClient.ping()
+			if (this._enableDebug) {
+				console.debug(`CacheXS -> Is Connected -> Result: ${result}`)
+			}
+			return result === 'PONG'
+		} catch (error) {
+			if (this._enableDebug) {
+				console.debug('CacheXS -> Is Connected -> Connection failed', error)
+			}
+			return false
 		}
-
-		return result === 'PONG'
 	}
 
 	/**
@@ -807,7 +1047,7 @@ export default class CacheXS {
 	 * // Usage
 	 * const cache = new CacheXS();
 	 * const config = cache.redisOptions;
-	 * console.log(config); // { host: 'localhost', port: 6379 }
+	 * console.log(config); // { connectionTimeout: 5000 }
 	 */
 	public get redisOptions(): RedisOptions | undefined {
 		return this._redisOptions
